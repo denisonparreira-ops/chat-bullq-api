@@ -1,0 +1,502 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────
+
+enum OrgRole {
+  OWNER
+  ADMIN
+  AGENT
+}
+
+enum AgentStatus {
+  ONLINE
+  AWAY
+  OFFLINE
+}
+
+enum ChannelType {
+  WHATSAPP_OFFICIAL
+  WHATSAPP_ZAPPFY
+  INSTAGRAM
+}
+
+enum ConversationStatus {
+  PENDING
+  BOT
+  OPEN
+  WAITING
+  CLOSED
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageContentType {
+  TEXT
+  IMAGE
+  AUDIO
+  VIDEO
+  DOCUMENT
+  STICKER
+  LOCATION
+  REACTION
+  TEMPLATE
+  INTERACTIVE
+  SYSTEM
+}
+
+enum MessageStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+enum DistributionRule {
+  ROUND_ROBIN
+  LEAST_BUSY
+  MANUAL
+}
+
+enum ChatbotNodeType {
+  START
+  MESSAGE
+  MENU
+  CONDITION
+  WAIT
+  ACTION
+  TRANSFER
+  END_FLOW
+}
+
+enum NotificationType {
+  NEW_MESSAGE
+  CONVERSATION_ASSIGNED
+  CONVERSATION_TRANSFERRED
+  SLA_WARNING
+  SLA_BREACH
+  MENTION
+  SYSTEM
+}
+
+// ─── Core: Auth + Multi-tenancy ──────────────────
+
+model User {
+  id        String    @id @default(cuid())
+  name      String
+  email     String    @unique
+  password  String
+  avatarUrl String?   @map("avatar_url")
+  isActive  Boolean   @default(true) @map("is_active")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  organizations         UserOrganization[]
+  assignedConversations Conversation[]     @relation("AssignedAgent")
+  notifications         Notification[]
+  pushSubscriptions     PushSubscription[]
+
+  @@map("users")
+}
+
+model Organization {
+  id        String    @id @default(cuid())
+  name      String
+  slug      String    @unique
+  logoUrl   String?   @map("logo_url")
+  plan      String    @default("free")
+  settings  Json      @default("{}")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  members       UserOrganization[]
+  channels      Channel[]
+  contacts      Contact[]
+  conversations Conversation[]
+  departments   Department[]
+  chatbotFlows  ChatbotFlow[]
+  quickReplies  QuickReply[]
+  tags          Tag[]
+  notifications Notification[]
+
+  @@map("organizations")
+}
+
+model UserOrganization {
+  id             String      @id @default(cuid())
+  userId         String      @map("user_id")
+  organizationId String      @map("organization_id")
+  role           OrgRole     @default(AGENT)
+  agentStatus    AgentStatus @default(OFFLINE) @map("agent_status")
+  maxConcurrent  Int         @default(5) @map("max_concurrent")
+  joinedAt       DateTime    @default(now()) @map("joined_at")
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  departmentAgents DepartmentAgent[]
+
+  @@unique([userId, organizationId])
+  @@map("user_organizations")
+}
+
+// ─── Channel Hub ─────────────────────────────────
+
+model Channel {
+  id             String      @id @default(cuid())
+  organizationId String      @map("organization_id")
+  type           ChannelType
+  name           String
+  config         Json
+  webhookSecret  String?     @map("webhook_secret")
+  isActive       Boolean     @default(true) @map("is_active")
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+  deletedAt      DateTime?   @map("deleted_at")
+
+  organization    Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contactChannels ContactChannel[]
+  conversations   Conversation[]
+  chatbotFlows    ChatbotFlowChannel[]
+
+  @@index([organizationId, type], name: "idx_channel_org_type")
+  @@map("channels")
+}
+
+// ─── Contacts ────────────────────────────────────
+
+model Contact {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  name           String?
+  phone          String?
+  email          String?
+  avatarUrl      String?   @map("avatar_url")
+  notes          String?
+  metadata       Json      @default("{}")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  deletedAt      DateTime? @map("deleted_at")
+
+  organization  Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channels      ContactChannel[]
+  conversations Conversation[]
+  tags          ContactTag[]
+
+  @@index([organizationId, phone], name: "idx_contact_org_phone")
+  @@index([organizationId, email], name: "idx_contact_org_email")
+  @@map("contacts")
+}
+
+model ContactChannel {
+  id               String   @id @default(cuid())
+  contactId        String   @map("contact_id")
+  channelId        String   @map("channel_id")
+  externalId       String   @map("external_id")
+  profileName      String?  @map("profile_name")
+  profileAvatarUrl String?  @map("profile_avatar_url")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, externalId], name: "uq_contact_channel_external")
+  @@map("contact_channels")
+}
+
+// ─── Conversations ───────────────────────────────
+
+model Conversation {
+  id              String             @id @default(cuid())
+  organizationId  String             @map("organization_id")
+  channelId       String             @map("channel_id")
+  contactId       String             @map("contact_id")
+  assignedToId    String?            @map("assigned_to_id")
+  departmentId    String?            @map("department_id")
+  status          ConversationStatus @default(PENDING)
+  subject         String?
+  protocol        String?
+  lastMessageAt   DateTime?          @map("last_message_at")
+  firstResponseAt DateTime?          @map("first_response_at")
+  closedAt        DateTime?          @map("closed_at")
+  metadata        Json               @default("{}")
+  createdAt       DateTime           @default(now()) @map("created_at")
+  updatedAt       DateTime           @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel      @relation(fields: [channelId], references: [id])
+  contact      Contact      @relation(fields: [contactId], references: [id])
+  assignedTo   User?        @relation("AssignedAgent", fields: [assignedToId], references: [id], onDelete: SetNull)
+  department   Department?  @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+
+  messages      Message[]
+  tags          ConversationTag[]
+  internalNotes InternalNote[]
+  auditLogs     ConversationAuditLog[]
+
+  @@index([organizationId, status], name: "idx_conv_org_status")
+  @@index([organizationId, assignedToId], name: "idx_conv_org_agent")
+  @@index([organizationId, channelId], name: "idx_conv_org_channel")
+  @@index([contactId], name: "idx_conv_contact")
+  @@index([lastMessageAt], name: "idx_conv_last_msg")
+  @@map("conversations")
+}
+
+model ConversationAuditLog {
+  id             String   @id @default(cuid())
+  conversationId String   @map("conversation_id")
+  actorId        String?  @map("actor_id")
+  action         String
+  fromValue      String?  @map("from_value")
+  toValue        String?  @map("to_value")
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt], name: "idx_audit_conv_time")
+  @@map("conversation_audit_logs")
+}
+
+model InternalNote {
+  id             String   @id @default(cuid())
+  conversationId String   @map("conversation_id")
+  authorId       String   @map("author_id")
+  content        String
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@map("internal_notes")
+}
+
+// ─── Messages ────────────────────────────────────
+
+model Message {
+  id             String             @id @default(cuid())
+  conversationId String             @map("conversation_id")
+  direction      MessageDirection
+  type           MessageContentType
+  content        Json
+  externalId     String?            @map("external_id")
+  status         MessageStatus      @default(QUEUED)
+  senderId       String?            @map("sender_id")
+  sentAt         DateTime?          @map("sent_at")
+  deliveredAt    DateTime?          @map("delivered_at")
+  readAt         DateTime?          @map("read_at")
+  failedReason   String?            @map("failed_reason")
+  metadata       Json               @default("{}")
+  createdAt      DateTime           @default(now()) @map("created_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt], name: "idx_msg_conv_time")
+  @@index([externalId], name: "idx_msg_external_id")
+  @@map("messages")
+}
+
+// ─── Departments / Routing ───────────────────────
+
+model Department {
+  id               String           @id @default(cuid())
+  organizationId   String           @map("organization_id")
+  name             String
+  description      String?
+  distributionRule DistributionRule  @default(ROUND_ROBIN) @map("distribution_rule")
+  isDefault        Boolean          @default(false) @map("is_default")
+  slaFirstResponse Int?             @map("sla_first_response")
+  slaResolution    Int?             @map("sla_resolution")
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @updatedAt @map("updated_at")
+  deletedAt        DateTime?        @map("deleted_at")
+
+  organization  Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agents        DepartmentAgent[]
+  conversations Conversation[]
+
+  @@map("departments")
+}
+
+model DepartmentAgent {
+  id                 String  @id @default(cuid())
+  departmentId       String  @map("department_id")
+  userOrganizationId String  @map("user_organization_id")
+  isActive           Boolean @default(true) @map("is_active")
+
+  department       Department       @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  userOrganization UserOrganization @relation(fields: [userOrganizationId], references: [id], onDelete: Cascade)
+
+  @@unique([departmentId, userOrganizationId])
+  @@map("department_agents")
+}
+
+// ─── Chatbot ─────────────────────────────────────
+
+model ChatbotFlow {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  name           String
+  description    String?
+  isActive       Boolean   @default(false) @map("is_active")
+  triggerType    String    @default("KEYWORD") @map("trigger_type")
+  triggerConfig  Json      @default("{}") @map("trigger_config")
+  variables      Json      @default("[]")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  deletedAt      DateTime? @map("deleted_at")
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  nodes        ChatbotNode[]
+  channels     ChatbotFlowChannel[]
+
+  @@map("chatbot_flows")
+}
+
+model ChatbotNode {
+  id        String          @id @default(cuid())
+  flowId    String          @map("flow_id")
+  type      ChatbotNodeType
+  name      String?
+  positionX Float           @default(0) @map("position_x")
+  positionY Float           @default(0) @map("position_y")
+  data      Json            @default("{}")
+  edges     Json            @default("[]")
+  createdAt DateTime        @default(now()) @map("created_at")
+  updatedAt DateTime        @updatedAt @map("updated_at")
+
+  flow ChatbotFlow @relation(fields: [flowId], references: [id], onDelete: Cascade)
+
+  @@map("chatbot_nodes")
+}
+
+model ChatbotFlowChannel {
+  flowId    String @map("flow_id")
+  channelId String @map("channel_id")
+
+  flow    ChatbotFlow @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  channel Channel     @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@id([flowId, channelId])
+  @@map("chatbot_flow_channels")
+}
+
+// ─── Quick Replies ───────────────────────────────
+
+model QuickReply {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  shortcut       String
+  title          String
+  content        String
+  attachments    Json      @default("[]")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  deletedAt      DateTime? @map("deleted_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, shortcut])
+  @@map("quick_replies")
+}
+
+// ─── Tags ────────────────────────────────────────
+
+model Tag {
+  id             String @id @default(cuid())
+  organizationId String @map("organization_id")
+  name           String
+  color          String @default("#6B7280")
+
+  organization  Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversations ConversationTag[]
+  contacts      ContactTag[]
+
+  @@unique([organizationId, name])
+  @@map("tags")
+}
+
+model ConversationTag {
+  conversationId String @map("conversation_id")
+  tagId          String @map("tag_id")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  tag          Tag          @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([conversationId, tagId])
+  @@map("conversation_tags")
+}
+
+model ContactTag {
+  contactId String @map("contact_id")
+  tagId     String @map("tag_id")
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tag     Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, tagId])
+  @@map("contact_tags")
+}
+
+// ─── Notifications ───────────────────────────────
+
+model Notification {
+  id             String           @id @default(cuid())
+  recipientId    String           @map("recipient_id")
+  organizationId String           @map("organization_id")
+  type           NotificationType
+  title          String
+  body           String
+  data           Json             @default("{}")
+  isRead         Boolean          @default(false) @map("is_read")
+  readAt         DateTime?        @map("read_at")
+  createdAt      DateTime         @default(now()) @map("created_at")
+
+  recipient    User         @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([recipientId, isRead, createdAt], name: "idx_notif_user_unread")
+  @@map("notifications")
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  endpoint  String   @unique
+  p256dhKey String   @map("p256dh_key")
+  authKey   String   @map("auth_key")
+  userAgent String?  @map("user_agent")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], name: "idx_push_sub_user")
+  @@map("push_subscriptions")
+}
+
+model NotificationPreference {
+  id             String           @id @default(cuid())
+  userId         String           @map("user_id")
+  organizationId String           @map("organization_id")
+  type           NotificationType
+  inApp          Boolean          @default(true) @map("in_app")
+  browserPush    Boolean          @default(true) @map("browser_push")
+  sound          Boolean          @default(true)
+  dndStart       String?          @map("dnd_start")
+  dndEnd         String?          @map("dnd_end")
+
+  @@unique([userId, organizationId, type])
+  @@map("notification_preferences")
+}
