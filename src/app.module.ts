@@ -14,6 +14,7 @@ import { QuickRepliesModule } from './modules/quick-replies/quick-replies.module
 import { TagsModule } from './modules/tags/tags.module';
 import { ChatbotModule } from './modules/chatbot/chatbot.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { RatingsModule } from './modules/ratings/ratings.module';
 import { ApiKeysModule } from './modules/api-keys/api-keys.module';
 import { PublicApiModule } from './modules/public-api/public-api.module';
 import redisConfig from './config/redis.config';
@@ -27,6 +28,7 @@ import redisConfig from './config/redis.config';
         connection: {
           host: config.get<string>('redis.host', 'localhost'),
           port: config.get<number>('redis.port', 6379),
+          password: config.get<string>('redis.password') || undefined,
         },
       }),
     }),
@@ -43,6 +45,7 @@ import redisConfig from './config/redis.config';
     TagsModule,
     ChatbotModule,
     DashboardModule,
+    RatingsModule,
     ApiKeysModule,
     PublicApiModule,
   ],

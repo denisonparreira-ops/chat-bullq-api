@@ -1,6 +1,7 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { ConversationStatus } from '@prisma/client';
 import { PrismaService } from '../../../database/prisma.service';
+import { RatingsService } from '../../ratings/ratings.service';
 
 type Transition = {
   from: ConversationStatus;
@@ -23,7 +24,10 @@ const VALID_TRANSITIONS: Transition[] = [
 export class ConversationFsmService {
   private readonly logger = new Logger(ConversationFsmService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly ratings: RatingsService,
+  ) {}
 
   canTransition(from: ConversationStatus, to: ConversationStatus): boolean {
     return VALID_TRANSITIONS.some((t) => t.from === from && t.to === to);
@@ -52,8 +56,10 @@ export class ConversationFsmService {
     if (to === ConversationStatus.CLOSED) {
       updateData.closedAt = new Date();
     }
-    if (to === ConversationStatus.OPEN && from === ConversationStatus.CLOSED) {
+    if (from === ConversationStatus.CLOSED && to !== ConversationStatus.CLOSED) {
       updateData.closedAt = null;
+      updateData.reopenedAt = new Date();
+      updateData.reopenedCount = { increment: 1 };
     }
 
     await this.prisma.conversation.update({
@@ -73,6 +79,12 @@ export class ConversationFsmService {
     });
 
     this.logger.log(`Conversation ${conversationId}: ${from} → ${to}`);
+
+    if (to === ConversationStatus.CLOSED) {
+      this.ratings.requestRating(conversationId).catch((err) => {
+        this.logger.warn(`Failed to request rating for ${conversationId}: ${err?.message}`);
+      });
+    }
   }
 
   async assign(

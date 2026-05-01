@@ -23,6 +23,7 @@ export class IdempotencyService implements OnModuleDestroy {
     this.redis = new Redis({
       host: this.config.get<string>('REDIS_HOST', 'localhost'),
       port: this.config.get<number>('REDIS_PORT', 6379),
+      password: this.config.get<string>('REDIS_PASSWORD') || undefined,
       maxRetriesPerRequest: null,
       enableReadyCheck: false,
     });

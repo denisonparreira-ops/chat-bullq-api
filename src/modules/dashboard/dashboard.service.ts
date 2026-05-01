@@ -53,6 +53,34 @@ export class DashboardService {
       this.getSlaCompliance(organizationId, { from: prevFrom, to: range.from }),
     ]);
 
+    const [closedNoReopen, csatAgg, prevCsatAgg] = await Promise.all([
+      this.prisma.conversation.count({
+        where: {
+          organizationId, status: 'CLOSED',
+          closedAt: { gte: range.from, lte: range.to },
+          reopenedCount: 0,
+        },
+      }),
+      this.prisma.conversationRating.aggregate({
+        where: { organizationId, respondedAt: { gte: range.from, lte: range.to } },
+        _avg: { score: true },
+        _count: { _all: true },
+      }),
+      this.prisma.conversationRating.aggregate({
+        where: { organizationId, respondedAt: { gte: prevFrom, lte: range.from } },
+        _avg: { score: true },
+      }),
+    ]);
+
+    const fcrPercent =
+      closedInPeriod > 0 ? Math.round((closedNoReopen / closedInPeriod) * 100) : null;
+    const csatScore = csatAgg._avg.score !== null ? Math.round(csatAgg._avg.score * 10) / 10 : null;
+    const prevCsatScore = prevCsatAgg._avg.score;
+    const csatTrend =
+      csatScore !== null && prevCsatScore !== null
+        ? Math.round((csatScore - prevCsatScore) * 10) / 10
+        : 0;
+
     const activeConversations = openConversations + pendingConversations + waitingConversations;
 
     const resolutionRatePercent =
