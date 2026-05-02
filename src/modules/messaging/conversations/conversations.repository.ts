@@ -22,7 +22,12 @@ export interface InboxFilters {
 export class ConversationsRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findInbox(filters: InboxFilters, skip: number, take: number) {
+  async findInbox(
+    filters: InboxFilters,
+    skip: number,
+    take: number,
+    currentUserId?: string,
+  ) {
     if (
       filters.accessibleChannelIds !== undefined &&
       filters.accessibleChannelIds.length === 0
@@ -126,7 +131,68 @@ export class ConversationsRepository {
       this.prisma.conversation.count({ where }),
     ]);
 
-    return { conversations, total };
+    // Per-user unread counters. Caller passes currentUserId; the user's
+    // ConversationRead row holds the lastReadAt cursor and we count INBOUND
+    // messages newer than that cursor. Conversations the user never opened
+    // get every inbound message counted as unread.
+    const enriched = currentUserId
+      ? await this.attachUnreadCounts(conversations, currentUserId)
+      : conversations.map((c) => ({ ...c, unreadCount: 0 }));
+
+    return { conversations: enriched, total };
+  }
+
+  private async attachUnreadCounts<
+    T extends { id: string; createdAt: Date },
+  >(conversations: T[], userId: string): Promise<Array<T & { unreadCount: number }>> {
+    if (conversations.length === 0) return [];
+    const ids = conversations.map((c) => c.id);
+    const reads = await this.prisma.conversationRead.findMany({
+      where: { userId, conversationId: { in: ids } },
+      select: { conversationId: true, lastReadAt: true },
+    });
+    const readByConv = new Map(
+      reads.map((r) => [r.conversationId, r.lastReadAt]),
+    );
+
+    // Run the counts in parallel — bounded by `take` (≤ 30 typically).
+    const counts = await Promise.all(
+      conversations.map((c) => {
+        const cursor = readByConv.get(c.id);
+        return this.prisma.message.count({
+          where: {
+            conversationId: c.id,
+            direction: 'INBOUND',
+            ...(cursor ? { createdAt: { gt: cursor } } : {}),
+          },
+        });
+      }),
+    );
+
+    return conversations.map((c, i) => ({ ...c, unreadCount: counts[i] }));
+  }
+
+  /** Marks a conversation as read for a user up to the given message (or now). */
+  async markAsRead(
+    userId: string,
+    conversationId: string,
+    lastReadMessageId?: string,
+  ) {
+    return this.prisma.conversationRead.upsert({
+      where: {
+        userId_conversationId: { userId, conversationId },
+      },
+      create: {
+        userId,
+        conversationId,
+        lastReadMessageId: lastReadMessageId ?? null,
+        lastReadAt: new Date(),
+      },
+      update: {
+        lastReadMessageId: lastReadMessageId ?? null,
+        lastReadAt: new Date(),
+      },
+    });
   }
 
   async findById(id: string) {

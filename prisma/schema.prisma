@@ -110,6 +110,7 @@ model User {
   sentInvitations       Invitation[]
   apiKeys               ApiKey[]
   inboxViews            InboxView[]
+  conversationReads     ConversationRead[]
 
   @@map("users")
 }
@@ -396,6 +397,7 @@ model Conversation {
   rating        ConversationRating?
   aiRuns        AiAgentRun[]
   aiHandoffs    AiAgentHandoff[]
+  reads         ConversationRead[]
 
   @@index([organizationId, status], name: "idx_conv_org_status")
   @@index([organizationId, assignedToId], name: "idx_conv_org_agent")
@@ -1050,4 +1052,29 @@ model InboxView {
   @@index([userId, order])
   @@index([organizationId, userId])
   @@map("inbox_views")
+}
+
+// ─── Conversation reads (unread counter per user) ──────────
+//
+// Per-user "last seen" pointer for a conversation. Reading the inbox
+// or opening a thread upserts this row with lastReadAt = now and the
+// id of the latest message at that moment. The unread count for a
+// (user, conversation) pair = COUNT(messages WHERE direction=INBOUND
+// AND createdAt > lastReadAt). When no row exists, the user has never
+// opened the conversation — every inbound message counts as unread.
+model ConversationRead {
+  id                String   @id @default(cuid())
+  userId            String   @map("user_id")
+  conversationId    String   @map("conversation_id")
+  lastReadMessageId String?  @map("last_read_message_id")
+  lastReadAt        DateTime @default(now()) @map("last_read_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, conversationId])
+  @@index([userId])
+  @@index([conversationId])
+  @@map("conversation_reads")
 }

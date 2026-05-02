@@ -36,6 +36,7 @@ export class ConversationsController {
   @ApiQuery({ name: 'limit', required: false })
   findInbox(
     @CurrentOrg('id') orgId: string,
+    @CurrentUser('id') userId: string,
     @CurrentChannelAccess() access: ChannelAccess,
     @Query('status') status?: string,
     @Query('channelId') channelId?: string,
@@ -50,6 +51,25 @@ export class ConversationsController {
       parseInt(page || '1', 10),
       parseInt(limit || '20', 10),
       access,
+      userId,
+    );
+  }
+
+  @Post(':id/read')
+  @ApiOperation({ summary: 'Mark conversation as read for current user' })
+  markAsRead(
+    @Param('id') id: string,
+    @CurrentOrg('id') orgId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentChannelAccess() access: ChannelAccess,
+    @Body() body?: { lastReadMessageId?: string },
+  ) {
+    return this.service.markAsRead(
+      id,
+      orgId,
+      userId,
+      access,
+      body?.lastReadMessageId,
     );
   }
 

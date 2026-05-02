@@ -144,6 +144,7 @@ export class InboxViewsService {
       page,
       limit,
       access,
+      userId,
     );
   }
 }

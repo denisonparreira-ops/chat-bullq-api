@@ -66,6 +66,7 @@ export class ConversationsService {
     page: number,
     limit: number,
     access: ChannelAccess = 'ALL',
+    currentUserId?: string,
   ) {
     const validStatuses = new Set(Object.values(ConversationStatus));
     const parsedStatuses = filters.status
@@ -89,6 +90,7 @@ export class ConversationsService {
       inboxFilters,
       skip,
       limit,
+      currentUserId,
     );
 
     return {
@@ -299,6 +301,35 @@ export class ConversationsService {
   async getStatusCounts(organizationId: string, access: ChannelAccess = 'ALL') {
     const accessibleIds = access === 'ALL' ? undefined : [...access];
     return this.repository.countByStatus(organizationId, accessibleIds);
+  }
+
+  /**
+   * Marks a conversation as read for the current user. Upserts the
+   * ConversationRead row with lastReadAt = now and emits a realtime
+   * `conversation:read` event so any open client (other tab, mobile)
+   * zeros the badge in real time.
+   */
+  async markAsRead(
+    conversationId: string,
+    organizationId: string,
+    userId: string,
+    access: ChannelAccess = 'ALL',
+    lastReadMessageId?: string,
+  ) {
+    await this.findOne(conversationId, organizationId, access);
+    const read = await this.repository.markAsRead(
+      userId,
+      conversationId,
+      lastReadMessageId,
+    );
+
+    this.realtimeGateway.emitToUser(userId, 'conversation:read', {
+      conversationId,
+      userId,
+      lastReadAt: read.lastReadAt,
+    });
+
+    return { ok: true, lastReadAt: read.lastReadAt };
   }
 
   /**
