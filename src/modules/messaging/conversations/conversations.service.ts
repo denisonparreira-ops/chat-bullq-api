@@ -17,6 +17,8 @@ import {
   ChannelAccess,
   ChannelAccessService,
 } from '../../iam/channel-access/channel-access.service';
+import { AgentRouterService } from '../../ai-agents/router/agent-router.service';
+import { AiAgentRunnerService } from '../../ai-agents/runner/agent-runner.service';
 
 const SYNC_MESSAGE_PAGE_SIZE = 50;
 const SYNC_MAX_PAGES = 4;
@@ -33,6 +35,8 @@ export class ConversationsService {
     private readonly adapterRegistry: ChannelAdapterRegistry,
     private readonly historyImporter: HistoryImportService,
     private readonly channelAccess: ChannelAccessService,
+    private readonly agentRouter: AgentRouterService,
+    private readonly agentRunner: AiAgentRunnerService,
   ) {}
 
   private broadcastUpdate(conversation: Conversation | null): void {
@@ -180,6 +184,70 @@ export class ConversationsService {
       actorId,
     });
     return updated;
+  }
+
+  /**
+   * Manually trigger the AI agent to engage with this conversation right now.
+   * Reads the latest inbound (or any latest message if no inbound) as the
+   * trigger, calls the runner, and returns whatever final action the agent
+   * decided. Skipped silently if the router rejects (paused, no agent, etc).
+   */
+  async engageAi(
+    id: string,
+    organizationId: string,
+    actorId: string,
+    access: ChannelAccess = 'ALL',
+  ): Promise<{ engaged: boolean; reason?: string }> {
+    const conversation = await this.findOne(id, organizationId, access);
+
+    const decision = await this.agentRouter.shouldHandle(
+      conversation as Conversation,
+    );
+    if (!decision.handle) {
+      this.logger.log(
+        `engageAi skipped for conv ${id}: ${decision.reason} (actor=${actorId})`,
+      );
+      return { engaged: false, reason: decision.reason };
+    }
+
+    // Pick the most recent inbound as the trigger so the agent has something
+    // concrete to react to. Fall back to the latest message of any direction
+    // (covers the case where the conversation was opened by the human).
+    const triggerMessage =
+      (await this.prisma.message.findFirst({
+        where: { conversationId: id, direction: 'INBOUND' },
+        orderBy: { createdAt: 'desc' },
+      })) ??
+      (await this.prisma.message.findFirst({
+        where: { conversationId: id },
+        orderBy: { createdAt: 'desc' },
+      }));
+
+    if (!triggerMessage) {
+      return { engaged: false, reason: 'no-messages' };
+    }
+
+    await this.prisma.conversationAuditLog.create({
+      data: {
+        conversationId: id,
+        actorId,
+        action: 'AI_ENGAGED_MANUALLY',
+        metadata: { triggerMessageId: triggerMessage.id },
+      },
+    });
+
+    // Runner is async — kick it off in the background. The response payload
+    // (new outbound message) will arrive via realtime + the run record will
+    // appear in /ai-agents stats. Frontend can refetch right after the call.
+    this.agentRunner
+      .run({ conversation: conversation as Conversation, triggerMessage })
+      .catch((err) =>
+        this.logger.error(
+          `engageAi run failed for conv ${id}: ${err?.message ?? err}`,
+        ),
+      );
+
+    return { engaged: true };
   }
 
   async close(

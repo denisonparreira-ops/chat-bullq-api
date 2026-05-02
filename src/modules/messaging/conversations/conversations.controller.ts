@@ -114,6 +114,20 @@ export class ConversationsController {
     return this.service.toggleAi(id, orgId, value, userId, access);
   }
 
+  @Post(':id/ai/engage')
+  @ApiOperation({
+    summary:
+      'Manually engage the AI on this conversation right now. The agent reads the full message history, decides what to do (reply, delegate, transfer) and acts. Useful when the inbound stream is silent but a human wants the AI to take over (e.g. after pausing then resuming).',
+  })
+  engageAi(
+    @Param('id') id: string,
+    @CurrentOrg('id') orgId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentChannelAccess() access: ChannelAccess,
+  ) {
+    return this.service.engageAi(id, orgId, userId, access);
+  }
+
   @Post(':id/close')
   @ApiOperation({ summary: 'Close a conversation' })
   close(
