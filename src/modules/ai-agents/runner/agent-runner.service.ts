@@ -91,7 +91,7 @@ export class AiAgentRunnerService {
       triggerMessage,
     });
 
-    const tools = this.registry.getDefaultLlmDefinitions();
+    const tools = this.registry.getLlmDefinitionsForKind(agent.kind);
 
     const aggregateUsage = {
       inputTokens: 0,

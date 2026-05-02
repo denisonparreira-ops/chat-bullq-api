@@ -5,6 +5,9 @@ import { RealtimeModule } from '../../realtime/realtime.module';
 import { ReplyToConversationTool } from './builtin/reply-to-conversation.tool';
 import { TransferToHumanTool } from './builtin/transfer-to-human.tool';
 import { TagConversationTool } from './builtin/tag-conversation.tool';
+import { ListAvailableAgentsTool } from './builtin/list-available-agents.tool';
+import { DelegateToAgentTool } from './builtin/delegate-to-agent.tool';
+import { HandBackToOrchestratorTool } from './builtin/hand-back-to-orchestrator.tool';
 import { ToolRegistry } from './tool-registry.service';
 
 @Module({
@@ -17,6 +20,9 @@ import { ToolRegistry } from './tool-registry.service';
     ReplyToConversationTool,
     TransferToHumanTool,
     TagConversationTool,
+    ListAvailableAgentsTool,
+    DelegateToAgentTool,
+    HandBackToOrchestratorTool,
     ToolRegistry,
   ],
   exports: [ToolRegistry],
