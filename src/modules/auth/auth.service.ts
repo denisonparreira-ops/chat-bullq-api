@@ -111,6 +111,7 @@ export class AuthService {
         name: result.organization.name,
         slug: result.organization.slug,
         role: 'OWNER',
+        accessibleChannelIds: 'ALL' as const,
       }],
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
@@ -198,6 +199,12 @@ export class AuthService {
         name: result.organization.name,
         slug: result.organization.slug,
         role: invitation.role,
+        // New invited members start with no channel grants (deny-by-default).
+        // OWNER/ADMIN bypass; AGENT must be explicitly granted by an admin.
+        accessibleChannelIds:
+          invitation.role === 'OWNER' || invitation.role === 'ADMIN'
+            ? ('ALL' as const)
+            : ([] as string[]),
       }],
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
@@ -224,7 +231,10 @@ export class AuthService {
 
     const memberships = await this.prisma.userOrganization.findMany({
       where: { userId: user.id },
-      include: { organization: true },
+      include: {
+        organization: true,
+        channelAgents: { select: { channelId: true } },
+      },
     });
 
     const tokens = await this.generateTokens(user.id, user.email);
@@ -238,6 +248,10 @@ export class AuthService {
         name: m.organization.name,
         slug: m.organization.slug,
         role: m.role,
+        accessibleChannelIds:
+          m.role === 'OWNER' || m.role === 'ADMIN'
+            ? ('ALL' as const)
+            : m.channelAgents.map((c) => c.channelId),
       })),
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
@@ -273,7 +287,10 @@ export class AuthService {
 
     const memberships = await this.prisma.userOrganization.findMany({
       where: { userId },
-      include: { organization: true },
+      include: {
+        organization: true,
+        channelAgents: { select: { channelId: true } },
+      },
     });
 
     return {
@@ -283,6 +300,11 @@ export class AuthService {
         name: m.organization.name,
         slug: m.organization.slug,
         role: m.role,
+        // 'ALL' for OWNER/ADMIN — they bypass the per-channel allowlist.
+        accessibleChannelIds:
+          m.role === 'OWNER' || m.role === 'ADMIN'
+            ? ('ALL' as const)
+            : m.channelAgents.map((c) => c.channelId),
       })),
     };
   }

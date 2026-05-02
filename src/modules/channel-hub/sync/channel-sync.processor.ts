@@ -118,7 +118,7 @@ export class ChannelSyncProcessor extends WorkerHost {
           msgImported += msgResult;
 
           if (msgResult > 0) {
-            this.importer.notifyConversationImported(
+            await this.importer.notifyConversationImported(
               channel.organizationId,
               importResult.conversationId,
             );
@@ -256,7 +256,7 @@ export class ChannelSyncProcessor extends WorkerHost {
     channelId: string,
     payload: Record<string, any>,
   ): void {
-    this.realtimeGateway.emitToOrg(organizationId, 'channel:sync-progress', {
+    this.realtimeGateway.emitToChannel(channelId, 'channel:sync-progress', {
       syncJobId,
       channelId,
       ...payload,

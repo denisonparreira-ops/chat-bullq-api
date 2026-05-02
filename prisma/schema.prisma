@@ -153,6 +153,7 @@ model UserOrganization {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   departmentAgents DepartmentAgent[]
+  channelAgents    ChannelAgent[]
 
   @@unique([userId, organizationId])
   @@map("user_organizations")
@@ -201,14 +202,30 @@ model Channel {
   updatedAt      DateTime    @updatedAt @map("updated_at")
   deletedAt      DateTime?   @map("deleted_at")
 
-  organization    Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization    Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   contactChannels ContactChannel[]
   conversations   Conversation[]
   chatbotFlows    ChatbotFlowChannel[]
   syncJobs        ChannelSyncJob[]
+  channelAgents   ChannelAgent[]
 
   @@index([organizationId, type], name: "idx_channel_org_type")
   @@map("channels")
+}
+
+model ChannelAgent {
+  id                 String   @id @default(cuid())
+  channelId          String   @map("channel_id")
+  userOrganizationId String   @map("user_organization_id")
+  grantedAt          DateTime @default(now()) @map("granted_at")
+  grantedById        String?  @map("granted_by_id")
+
+  channel          Channel          @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  userOrganization UserOrganization @relation(fields: [userOrganizationId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, userOrganizationId])
+  @@index([userOrganizationId], name: "idx_channel_agent_userorg")
+  @@map("channel_agents")
 }
 
 // ─── Webhook Events (append-only audit + replay) ──
@@ -221,15 +238,15 @@ enum WebhookEventStatus {
 }
 
 model WebhookEvent {
-  id             String             @id @default(cuid())
-  channelId      String?            @map("channel_id")
-  channelType    ChannelType        @map("channel_type")
-  status         WebhookEventStatus @default(RECEIVED)
-  rawPayload     Json               @map("raw_payload")
-  headers        Json               @default("{}")
-  errorMessage   String?            @map("error_message")
-  receivedAt     DateTime           @default(now()) @map("received_at")
-  processedAt    DateTime?          @map("processed_at")
+  id           String             @id @default(cuid())
+  channelId    String?            @map("channel_id")
+  channelType  ChannelType        @map("channel_type")
+  status       WebhookEventStatus @default(RECEIVED)
+  rawPayload   Json               @map("raw_payload")
+  headers      Json               @default("{}")
+  errorMessage String?            @map("error_message")
+  receivedAt   DateTime           @default(now()) @map("received_at")
+  processedAt  DateTime?          @map("processed_at")
 
   @@index([channelId, receivedAt(sort: Desc)], name: "idx_webhook_channel_time")
   @@index([channelType, status, receivedAt(sort: Desc)], name: "idx_webhook_type_status")
@@ -253,22 +270,22 @@ enum ChannelSyncMode {
 }
 
 model ChannelSyncJob {
-  id             String            @id @default(cuid())
-  channelId      String            @map("channel_id")
-  status         ChannelSyncStatus @default(PENDING)
-  mode           ChannelSyncMode   @default(INITIAL)
-  lookbackDays   Int               @default(90) @map("lookback_days")
-  startedAt      DateTime?         @map("started_at")
-  finishedAt     DateTime?         @map("finished_at")
-  conversationsTotal    Int        @default(0) @map("conversations_total")
-  conversationsImported Int        @default(0) @map("conversations_imported")
-  messagesImported      Int        @default(0) @map("messages_imported")
-  contactsImported      Int        @default(0) @map("contacts_imported")
-  errorMessage   String?           @map("error_message")
-  lastCursor     String?           @map("last_cursor")
-  metadata       Json              @default("{}")
-  createdAt      DateTime          @default(now()) @map("created_at")
-  updatedAt      DateTime          @updatedAt @map("updated_at")
+  id                    String            @id @default(cuid())
+  channelId             String            @map("channel_id")
+  status                ChannelSyncStatus @default(PENDING)
+  mode                  ChannelSyncMode   @default(INITIAL)
+  lookbackDays          Int               @default(90) @map("lookback_days")
+  startedAt             DateTime?         @map("started_at")
+  finishedAt            DateTime?         @map("finished_at")
+  conversationsTotal    Int               @default(0) @map("conversations_total")
+  conversationsImported Int               @default(0) @map("conversations_imported")
+  messagesImported      Int               @default(0) @map("messages_imported")
+  contactsImported      Int               @default(0) @map("contacts_imported")
+  errorMessage          String?           @map("error_message")
+  lastCursor            String?           @map("last_cursor")
+  metadata              Json              @default("{}")
+  createdAt             DateTime          @default(now()) @map("created_at")
+  updatedAt             DateTime          @updatedAt @map("updated_at")
 
   channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
 
@@ -334,6 +351,8 @@ model Conversation {
   lastMessageAt   DateTime?          @map("last_message_at")
   firstResponseAt DateTime?          @map("first_response_at")
   closedAt        DateTime?          @map("closed_at")
+  reopenedAt      DateTime?          @map("reopened_at")
+  reopenedCount   Int                @default(0) @map("reopened_count")
   deletedAt       DateTime?          @map("deleted_at")
   metadata        Json               @default("{}")
   createdAt       DateTime           @default(now()) @map("created_at")
@@ -349,6 +368,7 @@ model Conversation {
   tags          ConversationTag[]
   internalNotes InternalNote[]
   auditLogs     ConversationAuditLog[]
+  rating        ConversationRating?
 
   @@index([organizationId, status], name: "idx_conv_org_status")
   @@index([organizationId, assignedToId], name: "idx_conv_org_agent")
@@ -356,6 +376,25 @@ model Conversation {
   @@index([contactId], name: "idx_conv_contact")
   @@index([lastMessageAt], name: "idx_conv_last_msg")
   @@map("conversations")
+}
+
+model ConversationRating {
+  id             String    @id @default(cuid())
+  conversationId String    @unique @map("conversation_id")
+  organizationId String    @map("organization_id")
+  agentId        String?   @map("agent_id")
+  score          Int
+  comment        String?
+  token          String    @unique
+  requestedAt    DateTime  @default(now()) @map("requested_at")
+  respondedAt    DateTime? @map("responded_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, respondedAt], name: "idx_rating_org_responded")
+  @@index([organizationId, agentId], name: "idx_rating_org_agent")
+  @@map("conversation_ratings")
 }
 
 model ConversationAuditLog {
@@ -422,7 +461,7 @@ model Department {
   organizationId   String           @map("organization_id")
   name             String
   description      String?
-  distributionRule DistributionRule  @default(ROUND_ROBIN) @map("distribution_rule")
+  distributionRule DistributionRule @default(ROUND_ROBIN) @map("distribution_rule")
   isDefault        Boolean          @default(false) @map("is_default")
   slaFirstResponse Int?             @map("sla_first_response")
   slaResolution    Int?             @map("sla_resolution")
@@ -430,7 +469,7 @@ model Department {
   updatedAt        DateTime         @updatedAt @map("updated_at")
   deletedAt        DateTime?        @map("deleted_at")
 
-  organization  Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization  Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   agents        DepartmentAgent[]
   conversations Conversation[]
 
@@ -465,7 +504,7 @@ model ChatbotFlow {
   updatedAt      DateTime  @updatedAt @map("updated_at")
   deletedAt      DateTime? @map("deleted_at")
 
-  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   nodes        ChatbotNode[]
   channels     ChatbotFlowChannel[]
 
@@ -527,7 +566,7 @@ model Tag {
   name           String
   color          String @default("#6B7280")
 
-  organization  Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization  Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   conversations ConversationTag[]
   contacts      ContactTag[]
 

@@ -88,6 +88,20 @@ export class DashboardController {
     return this.service.getBotPerformance(orgId, this.parseRange(from, to));
   }
 
+  @Get('csat')
+  @ApiOperation({ summary: 'CSAT breakdown (avg, distribution, recent comments)' })
+  @ApiQuery({ name: 'from', required: false }) @ApiQuery({ name: 'to', required: false })
+  getCsat(@CurrentOrg('id') orgId: string, @Query('from') from?: string, @Query('to') to?: string) {
+    return this.service.getCsatBreakdown(orgId, this.parseRange(from, to));
+  }
+
+  @Get('reopens')
+  @ApiOperation({ summary: 'Conversation reopen tracking + worst offenders' })
+  @ApiQuery({ name: 'from', required: false }) @ApiQuery({ name: 'to', required: false })
+  getReopens(@CurrentOrg('id') orgId: string, @Query('from') from?: string, @Query('to') to?: string) {
+    return this.service.getReopens(orgId, this.parseRange(from, to));
+  }
+
   @Get('top-tags')
   @ApiOperation({ summary: 'Top tags / conversation reasons' })
   @ApiQuery({ name: 'from', required: false }) @ApiQuery({ name: 'to', required: false })

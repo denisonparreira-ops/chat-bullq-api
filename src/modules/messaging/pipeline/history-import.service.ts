@@ -159,8 +159,16 @@ export class HistoryImportService {
     return { imported: toCreate.length, skipped: messages.length - toCreate.length };
   }
 
-  notifyConversationImported(organizationId: string, conversationId: string): void {
-    this.realtimeGateway.emitToOrg(organizationId, 'conversation:imported', {
+  async notifyConversationImported(
+    organizationId: string,
+    conversationId: string,
+  ): Promise<void> {
+    const conv = await this.prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { channelId: true },
+    });
+    if (!conv) return;
+    this.realtimeGateway.emitToChannel(conv.channelId, 'conversation:imported', {
       conversationId,
     });
   }

@@ -3,10 +3,14 @@ import { PassportStrategy } from '@nestjs/passport';
 import { Strategy } from 'passport-custom';
 import { Request } from 'express';
 import { ApiKeysService } from '../api-keys/api-keys.service';
+import { ChannelAccessService } from '../iam/channel-access/channel-access.service';
 
 @Injectable()
 export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') {
-  constructor(private readonly apiKeysService: ApiKeysService) {
+  constructor(
+    private readonly apiKeysService: ApiKeysService,
+    private readonly channelAccess: ChannelAccessService,
+  ) {
     super();
   }
 
@@ -26,8 +30,11 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') {
       throw new UnauthorizedException('Invalid or revoked API key');
     }
 
-    // Hidrata request com user e organization (mesmo shape que JwtAuthGuard + OrgGuard produzem)
     (req as any).organization = result.organization;
+    (req as any).accessibleChannelIds = await this.channelAccess.getAccessibleChannelIds(
+      result.membership.id,
+      result.membership.role,
+    );
     return result.user;
   }
 }

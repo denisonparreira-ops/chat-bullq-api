@@ -17,6 +17,7 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { RatingsModule } from './modules/ratings/ratings.module';
 import { ApiKeysModule } from './modules/api-keys/api-keys.module';
 import { PublicApiModule } from './modules/public-api/public-api.module';
+import { ChannelAccessModule } from './modules/iam/channel-access/channel-access.module';
 import redisConfig from './config/redis.config';
 
 @Module({
@@ -33,6 +34,7 @@ import redisConfig from './config/redis.config';
       }),
     }),
     PrismaModule,
+    ChannelAccessModule,
     AuthModule,
     UsersModule,
     OrganizationsModule,

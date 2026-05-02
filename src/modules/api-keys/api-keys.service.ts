@@ -115,7 +115,9 @@ export class ApiKeysService {
         name: apiKey.organization.name,
         slug: apiKey.organization.slug,
         userRole: membership.role,
+        userOrganizationId: membership.id,
       },
+      membership,
       apiKeyId: apiKey.id,
     };
   }

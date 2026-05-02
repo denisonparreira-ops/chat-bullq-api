@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { PrismaService } from '../../database/prisma.service';
+import { ChannelAccessService } from '../../modules/iam/channel-access/channel-access.service';
 import { IS_PUBLIC_KEY } from '../decorators';
 
 @Injectable()
@@ -14,6 +15,7 @@ export class OrgGuard implements CanActivate {
   constructor(
     private prisma: PrismaService,
     private reflector: Reflector,
+    private channelAccess: ChannelAccessService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -51,7 +53,13 @@ export class OrgGuard implements CanActivate {
       name: membership.organization.name,
       slug: membership.organization.slug,
       userRole: membership.role,
+      userOrganizationId: membership.id,
     };
+
+    request.accessibleChannelIds = await this.channelAccess.getAccessibleChannelIds(
+      membership.id,
+      membership.role,
+    );
 
     return true;
   }

@@ -15,7 +15,8 @@ import { ChannelsService } from './channels.service';
 import { CreateChannelDto } from './dto/create-channel.dto';
 import { UpdateChannelDto } from './dto/update-channel.dto';
 import { JwtAuthGuard, OrgGuard, RolesGuard } from '../../../common/guards';
-import { CurrentOrg, Roles } from '../../../common/decorators';
+import { CurrentChannelAccess, CurrentOrg, Roles } from '../../../common/decorators';
+import type { ChannelAccess } from '../../iam/channel-access/channel-access.service';
 
 @ApiTags('Channels')
 @ApiBearerAuth()
@@ -27,20 +28,33 @@ export class ChannelsController {
   @Post()
   @Roles(OrgRole.OWNER, OrgRole.ADMIN)
   @ApiOperation({ summary: 'Create a new channel' })
-  create(@CurrentOrg('id') orgId: string, @Body() dto: CreateChannelDto) {
-    return this.service.create(orgId, dto);
+  create(
+    @CurrentOrg() org: { id: string; userOrganizationId: string; userRole: OrgRole },
+    @Body() dto: CreateChannelDto,
+  ) {
+    return this.service.create(org.id, dto, {
+      userOrganizationId: org.userOrganizationId,
+      role: org.userRole,
+    });
   }
 
   @Get()
   @ApiOperation({ summary: 'List all channels for the organization' })
-  findAll(@CurrentOrg('id') orgId: string) {
-    return this.service.findAll(orgId);
+  findAll(
+    @CurrentOrg('id') orgId: string,
+    @CurrentChannelAccess() access: ChannelAccess,
+  ) {
+    return this.service.findAll(orgId, access);
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get channel by ID' })
-  findOne(@Param('id') id: string, @CurrentOrg('id') orgId: string) {
-    return this.service.findOne(id, orgId);
+  findOne(
+    @Param('id') id: string,
+    @CurrentOrg('id') orgId: string,
+    @CurrentChannelAccess() access: ChannelAccess,
+  ) {
+    return this.service.findOne(id, orgId, access);
   }
 
   @Patch(':id')

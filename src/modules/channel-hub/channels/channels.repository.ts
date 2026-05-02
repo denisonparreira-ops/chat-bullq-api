@@ -16,9 +16,13 @@ export class ChannelsRepository {
     });
   }
 
-  async findByOrganization(organizationId: string) {
+  async findByOrganization(organizationId: string, accessibleIds?: string[]) {
     return this.prisma.channel.findMany({
-      where: { organizationId, deletedAt: null },
+      where: {
+        organizationId,
+        deletedAt: null,
+        ...(accessibleIds !== undefined ? { id: { in: accessibleIds } } : {}),
+      },
       orderBy: { createdAt: 'desc' },
     });
   }

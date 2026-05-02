@@ -14,6 +14,10 @@ import { MessagesRepository } from './messages.repository';
 import { SendMessageDto } from './dto/send-message.dto';
 import { PrismaService } from '../../../database/prisma.service';
 import { RealtimeGateway } from '../../realtime/realtime.gateway';
+import {
+  ChannelAccess,
+  ChannelAccessService,
+} from '../../iam/channel-access/channel-access.service';
 
 @Injectable()
 export class MessagesService {
@@ -21,10 +25,16 @@ export class MessagesService {
     private readonly repository: MessagesRepository,
     private readonly prisma: PrismaService,
     private readonly realtimeGateway: RealtimeGateway,
+    private readonly channelAccess: ChannelAccessService,
     @InjectQueue('outbound-messages') private readonly outboundQueue: Queue,
   ) {}
 
-  async send(dto: SendMessageDto, senderId: string, organizationId: string) {
+  async send(
+    dto: SendMessageDto,
+    senderId: string,
+    organizationId: string,
+    access: ChannelAccess = 'ALL',
+  ) {
     const conversation = await this.prisma.conversation.findUnique({
       where: { id: dto.conversationId },
       include: {
@@ -37,6 +47,7 @@ export class MessagesService {
     if (conversation.organizationId !== organizationId) {
       throw new ForbiddenException();
     }
+    this.channelAccess.assertChannelAccess(access, conversation.channelId);
 
     const contactChannel = conversation.contact.channels.find(
       (cc) => cc.channelId === conversation.channelId,
@@ -59,9 +70,11 @@ export class MessagesService {
       data: { lastMessageAt: new Date() },
     });
 
-    // Optimistic realtime: everyone in the org/conversation sees the outbound
-    // QUEUED row instantly, independent of the outbound worker roundtrip.
-    this.realtimeGateway.emitToOrg(organizationId, 'message:new', {
+    // Optimistic realtime: everyone in the channel/conversation sees the
+    // outbound QUEUED row instantly, independent of the outbound worker
+    // roundtrip. Channel-scoped so AGENTs without access to the channel
+    // don't receive this event.
+    this.realtimeGateway.emitToChannel(conversation.channelId, 'message:new', {
       message,
       conversationId: conversation.id,
       contactId: conversation.contactId,
@@ -112,6 +125,7 @@ export class MessagesService {
     organizationId: string,
     page: number,
     limit: number,
+    access: ChannelAccess = 'ALL',
   ) {
     const conversation = await this.prisma.conversation.findUnique({
       where: { id: conversationId },
@@ -120,6 +134,7 @@ export class MessagesService {
     if (conversation.organizationId !== organizationId) {
       throw new ForbiddenException();
     }
+    this.channelAccess.assertChannelAccess(access, conversation.channelId);
 
     const skip = (page - 1) * limit;
     const { messages, total } = await this.repository.findByConversation(

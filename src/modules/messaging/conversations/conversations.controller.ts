@@ -12,7 +12,12 @@ import { ApiBearerAuth, ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger'
 import { ConversationsService } from './conversations.service';
 import { UpdateConversationDto } from './dto/update-conversation.dto';
 import { JwtAuthGuard, OrgGuard, RolesGuard } from '../../../common/guards';
-import { CurrentUser, CurrentOrg } from '../../../common/decorators';
+import {
+  CurrentUser,
+  CurrentOrg,
+  CurrentChannelAccess,
+} from '../../../common/decorators';
+import type { ChannelAccess } from '../../iam/channel-access/channel-access.service';
 
 @ApiTags('Conversations')
 @ApiBearerAuth()
@@ -31,6 +36,7 @@ export class ConversationsController {
   @ApiQuery({ name: 'limit', required: false })
   findInbox(
     @CurrentOrg('id') orgId: string,
+    @CurrentChannelAccess() access: ChannelAccess,
     @Query('status') status?: string,
     @Query('channelId') channelId?: string,
     @Query('assignedToId') assignedToId?: string,
@@ -43,19 +49,27 @@ export class ConversationsController {
       { status, channelId, assignedToId, search },
       parseInt(page || '1', 10),
       parseInt(limit || '20', 10),
+      access,
     );
   }
 
   @Get('counts')
   @ApiOperation({ summary: 'Get conversation counts by status' })
-  getCounts(@CurrentOrg('id') orgId: string) {
-    return this.service.getStatusCounts(orgId);
+  getCounts(
+    @CurrentOrg('id') orgId: string,
+    @CurrentChannelAccess() access: ChannelAccess,
+  ) {
+    return this.service.getStatusCounts(orgId, access);
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get conversation details' })
-  findOne(@Param('id') id: string, @CurrentOrg('id') orgId: string) {
-    return this.service.findOne(id, orgId);
+  findOne(
+    @Param('id') id: string,
+    @CurrentOrg('id') orgId: string,
+    @CurrentChannelAccess() access: ChannelAccess,
+  ) {
+    return this.service.findOne(id, orgId, access);
   }
 
   @Patch(':id')
@@ -65,8 +79,9 @@ export class ConversationsController {
     @CurrentOrg('id') orgId: string,
     @Body() dto: UpdateConversationDto,
     @CurrentUser('id') userId: string,
+    @CurrentChannelAccess() access: ChannelAccess,
   ) {
-    return this.service.update(id, orgId, dto, userId);
+    return this.service.update(id, orgId, dto, userId, access);
   }
 
   @Post(':id/assign-me')
@@ -75,8 +90,9 @@ export class ConversationsController {
     @Param('id') id: string,
     @CurrentOrg('id') orgId: string,
     @CurrentUser('id') userId: string,
+    @CurrentChannelAccess() access: ChannelAccess,
   ) {
-    return this.service.assignToMe(id, orgId, userId);
+    return this.service.assignToMe(id, orgId, userId, access);
   }
 
   @Post(':id/close')
@@ -85,8 +101,9 @@ export class ConversationsController {
     @Param('id') id: string,
     @CurrentOrg('id') orgId: string,
     @CurrentUser('id') userId: string,
+    @CurrentChannelAccess() access: ChannelAccess,
   ) {
-    return this.service.close(id, orgId, userId);
+    return this.service.close(id, orgId, userId, access);
   }
 
   @Post(':id/reopen')
@@ -95,8 +112,9 @@ export class ConversationsController {
     @Param('id') id: string,
     @CurrentOrg('id') orgId: string,
     @CurrentUser('id') userId: string,
+    @CurrentChannelAccess() access: ChannelAccess,
   ) {
-    return this.service.reopen(id, orgId, userId);
+    return this.service.reopen(id, orgId, userId, access);
   }
 
   @Post(':id/sync')
@@ -104,7 +122,11 @@ export class ConversationsController {
     summary:
       'Force-sync the latest messages for a conversation from the channel provider',
   })
-  syncMessages(@Param('id') id: string, @CurrentOrg('id') orgId: string) {
-    return this.service.syncMessages(id, orgId);
+  syncMessages(
+    @Param('id') id: string,
+    @CurrentOrg('id') orgId: string,
+    @CurrentChannelAccess() access: ChannelAccess,
+  ) {
+    return this.service.syncMessages(id, orgId, access);
   }
 }

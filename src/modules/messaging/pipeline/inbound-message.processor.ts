@@ -118,7 +118,7 @@ export class InboundMessageProcessor extends WorkerHost {
         data: { lastMessageAt: new Date() },
       });
 
-      this.realtimeGateway.emitToOrg(organizationId, 'message:new', {
+      this.realtimeGateway.emitToChannel(channelId, 'message:new', {
         message: savedMessage,
         conversationId,
         contactId,

@@ -18,7 +18,12 @@ import { UploadsService } from './uploads.service';
 import { MediaResolverService } from './media-resolver.service';
 import { SendMessageDto } from './dto/send-message.dto';
 import { JwtAuthGuard, OrgGuard, RolesGuard } from '../../../common/guards';
-import { CurrentUser, CurrentOrg } from '../../../common/decorators';
+import {
+  CurrentUser,
+  CurrentOrg,
+  CurrentChannelAccess,
+} from '../../../common/decorators';
+import type { ChannelAccess } from '../../iam/channel-access/channel-access.service';
 
 @ApiTags('Messages')
 @ApiBearerAuth()
@@ -38,8 +43,9 @@ export class MessagesController {
     @Body() dto: SendMessageDto,
     @CurrentUser('id') userId: string,
     @CurrentOrg('id') orgId: string,
+    @CurrentChannelAccess() access: ChannelAccess,
   ) {
-    return this.service.send(dto, userId, orgId);
+    return this.service.send(dto, userId, orgId, access);
   }
 
   @Post('uploads/audio')
@@ -70,8 +76,9 @@ export class MessagesController {
   async getMedia(
     @Param('id') id: string,
     @CurrentOrg('id') orgId: string,
+    @CurrentChannelAccess() access: ChannelAccess,
   ) {
-    return this.mediaResolver.resolve(id, orgId);
+    return this.mediaResolver.resolve(id, orgId, access);
   }
 
   @Post(':id/transcribe')
@@ -82,10 +89,12 @@ export class MessagesController {
   transcribe(
     @Param('id') id: string,
     @CurrentOrg('id') orgId: string,
+    @CurrentChannelAccess() access: ChannelAccess,
     @Query('force') force?: string,
   ) {
     return this.transcription.transcribe(id, orgId, {
       force: force === 'true' || force === '1',
+      access,
     });
   }
 
@@ -97,6 +106,7 @@ export class MessagesController {
   findByConversation(
     @Query('conversationId') conversationId: string,
     @CurrentOrg('id') orgId: string,
+    @CurrentChannelAccess() access: ChannelAccess,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
@@ -105,6 +115,7 @@ export class MessagesController {
       orgId,
       parseInt(page || '1', 10),
       parseInt(limit || '50', 10),
+      access,
     );
   }
 }

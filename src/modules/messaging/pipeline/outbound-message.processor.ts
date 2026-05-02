@@ -116,7 +116,7 @@ export class OutboundMessageProcessor extends WorkerHost {
       }
 
       this.emitStatusUpdate(updated.conversationId, updated.id, MessageStatus.SENT);
-      this.realtimeGateway.emitToOrg(channel.organizationId, 'message:new', {
+      this.realtimeGateway.emitToChannel(channel.id, 'message:new', {
         message: updated,
         conversationId: updated.conversationId,
       });

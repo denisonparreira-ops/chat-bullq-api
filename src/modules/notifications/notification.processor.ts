@@ -14,7 +14,7 @@ export class NotificationProcessor extends WorkerHost {
   async process(job: Job): Promise<any> {
     const { notificationId, recipientId, organizationId, type, title, body, data } = job.data;
 
-    this.realtimeGateway.emitToOrg(organizationId, 'notification:new', {
+    this.realtimeGateway.emitToUser(recipientId, 'notification:new', {
       id: notificationId,
       recipientId,
       type,
@@ -24,7 +24,7 @@ export class NotificationProcessor extends WorkerHost {
       createdAt: new Date().toISOString(),
     });
 
-    this.logger.log(`Notification delivered via WS: ${notificationId} to org:${organizationId}`);
+    this.logger.log(`Notification delivered via WS: ${notificationId} to user:${recipientId}`);
 
     return { delivered: true, channels: ['in-app'] };
   }

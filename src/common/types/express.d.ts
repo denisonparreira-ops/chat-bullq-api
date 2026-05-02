@@ -5,6 +5,8 @@ declare namespace Express {
       name: string;
       slug: string;
       userRole: import('@prisma/client').OrgRole;
+      userOrganizationId: string;
     };
+    accessibleChannelIds?: 'ALL' | Set<string>;
   }
 }

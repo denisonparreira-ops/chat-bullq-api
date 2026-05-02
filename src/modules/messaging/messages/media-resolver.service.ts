@@ -28,6 +28,7 @@ export class MediaResolverService {
   async resolve(
     messageId: string,
     organizationId: string,
+    access: import('../../iam/channel-access/channel-access.service').ChannelAccess = 'ALL',
   ): Promise<{ url: string; mimeType?: string }> {
     const message = await this.prisma.message.findUnique({
       where: { id: messageId },
@@ -35,6 +36,12 @@ export class MediaResolverService {
     });
     if (!message) throw new NotFoundException('Message not found');
     if (message.conversation.organizationId !== organizationId) {
+      throw new NotFoundException('Message not found');
+    }
+    if (
+      access !== 'ALL' &&
+      !access.has(message.conversation.channelId)
+    ) {
       throw new NotFoundException('Message not found');
     }
 

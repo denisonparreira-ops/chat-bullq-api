@@ -13,6 +13,10 @@ import { RealtimeGateway } from '../../realtime/realtime.gateway';
 import { PrismaService } from '../../../database/prisma.service';
 import { ChannelAdapterRegistry } from '../../channel-hub/channel-adapter.registry';
 import { HistoryImportService } from '../pipeline/history-import.service';
+import {
+  ChannelAccess,
+  ChannelAccessService,
+} from '../../iam/channel-access/channel-access.service';
 
 const SYNC_MESSAGE_PAGE_SIZE = 50;
 const SYNC_MAX_PAGES = 4;
@@ -28,12 +32,13 @@ export class ConversationsService {
     private readonly prisma: PrismaService,
     private readonly adapterRegistry: ChannelAdapterRegistry,
     private readonly historyImporter: HistoryImportService,
+    private readonly channelAccess: ChannelAccessService,
   ) {}
 
   private broadcastUpdate(conversation: Conversation | null): void {
     if (!conversation) return;
-    this.realtimeGateway.emitToOrg(
-      conversation.organizationId,
+    this.realtimeGateway.emitToChannel(
+      conversation.channelId,
       'conversation:updated',
       { conversation },
     );
@@ -54,6 +59,7 @@ export class ConversationsService {
     },
     page: number,
     limit: number,
+    access: ChannelAccess = 'ALL',
   ) {
     const validStatuses = new Set(Object.values(ConversationStatus));
     const parsedStatuses = filters.status
@@ -67,6 +73,7 @@ export class ConversationsService {
       channelId: filters.channelId,
       assignedToId: filters.assignedToId,
       search: filters.search,
+      accessibleChannelIds: access === 'ALL' ? undefined : [...access],
     };
 
     const skip = (page - 1) * limit;
@@ -82,12 +89,13 @@ export class ConversationsService {
     };
   }
 
-  async findOne(id: string, organizationId: string) {
+  async findOne(id: string, organizationId: string, access: ChannelAccess = 'ALL') {
     const conversation = await this.repository.findById(id);
     if (!conversation) throw new NotFoundException('Conversation not found');
     if (conversation.organizationId !== organizationId) {
       throw new ForbiddenException();
     }
+    this.channelAccess.assertChannelAccess(access, conversation.channelId);
     return conversation;
   }
 
@@ -96,8 +104,9 @@ export class ConversationsService {
     organizationId: string,
     dto: UpdateConversationDto,
     actorId: string,
+    access: ChannelAccess = 'ALL',
   ) {
-    const conversation = await this.findOne(id, organizationId);
+    const conversation = await this.findOne(id, organizationId, access);
 
     if (dto.assignedToId) {
       await this.fsm.assign(id, dto.assignedToId, actorId);
@@ -116,16 +125,26 @@ export class ConversationsService {
     return updated;
   }
 
-  async close(id: string, organizationId: string, actorId: string) {
-    await this.findOne(id, organizationId);
+  async close(
+    id: string,
+    organizationId: string,
+    actorId: string,
+    access: ChannelAccess = 'ALL',
+  ) {
+    await this.findOne(id, organizationId, access);
     await this.fsm.transition(id, ConversationStatus.CLOSED, actorId);
     const updated = await this.repository.findById(id);
     this.broadcastUpdate(updated as Conversation | null);
     return updated;
   }
 
-  async reopen(id: string, organizationId: string, actorId: string) {
-    const conversation = await this.findOne(id, organizationId);
+  async reopen(
+    id: string,
+    organizationId: string,
+    actorId: string,
+    access: ChannelAccess = 'ALL',
+  ) {
+    const conversation = await this.findOne(id, organizationId, access);
     const target = conversation.assignedToId
       ? ConversationStatus.OPEN
       : ConversationStatus.PENDING;
@@ -135,16 +154,22 @@ export class ConversationsService {
     return updated;
   }
 
-  async assignToMe(id: string, organizationId: string, userId: string) {
-    await this.findOne(id, organizationId);
+  async assignToMe(
+    id: string,
+    organizationId: string,
+    userId: string,
+    access: ChannelAccess = 'ALL',
+  ) {
+    await this.findOne(id, organizationId, access);
     await this.fsm.assign(id, userId, userId);
     const updated = await this.repository.findById(id);
     this.broadcastUpdate(updated as Conversation | null);
     return updated;
   }
 
-  async getStatusCounts(organizationId: string) {
-    return this.repository.countByStatus(organizationId);
+  async getStatusCounts(organizationId: string, access: ChannelAccess = 'ALL') {
+    const accessibleIds = access === 'ALL' ? undefined : [...access];
+    return this.repository.countByStatus(organizationId, accessibleIds);
   }
 
   /**
@@ -154,7 +179,7 @@ export class ConversationsService {
    * path for when an event was missed (provider downtime, webhook hiccup,
    * channel reconnected, etc.).
    */
-  async syncMessages(id: string, organizationId: string) {
+  async syncMessages(id: string, organizationId: string, access: ChannelAccess = 'ALL') {
     const conversation = await this.prisma.conversation.findUnique({
       where: { id },
       include: {
@@ -171,6 +196,7 @@ export class ConversationsService {
     if (conversation.organizationId !== organizationId) {
       throw new ForbiddenException();
     }
+    this.channelAccess.assertChannelAccess(access, conversation.channelId);
 
     const adapter = this.adapterRegistry.getHistorySync(conversation.channel.type);
     if (!adapter) {
@@ -228,7 +254,7 @@ export class ConversationsService {
     }
 
     if (imported > 0) {
-      this.historyImporter.notifyConversationImported(
+      await this.historyImporter.notifyConversationImported(
         organizationId,
         conversation.id,
       );

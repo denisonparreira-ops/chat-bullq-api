@@ -8,6 +8,7 @@ export interface InboxFilters {
   channelId?: string;
   assignedToId?: string;
   search?: string;
+  accessibleChannelIds?: string[];
 }
 
 @Injectable()
@@ -15,6 +16,13 @@ export class ConversationsRepository {
   constructor(private readonly prisma: PrismaService) {}
 
   async findInbox(filters: InboxFilters, skip: number, take: number) {
+    if (
+      filters.accessibleChannelIds !== undefined &&
+      filters.accessibleChannelIds.length === 0
+    ) {
+      return { conversations: [], total: 0 };
+    }
+
     const where: Prisma.ConversationWhereInput = {
       organizationId: filters.organizationId,
       // Hide conversations from soft-deleted channels. ChannelsRepository.softDelete
@@ -30,7 +38,18 @@ export class ConversationsRepository {
         ? filters.status[0]
         : { in: filters.status };
     }
-    if (filters.channelId) where.channelId = filters.channelId;
+    if (filters.accessibleChannelIds !== undefined) {
+      if (filters.channelId) {
+        if (!filters.accessibleChannelIds.includes(filters.channelId)) {
+          return { conversations: [], total: 0 };
+        }
+        where.channelId = filters.channelId;
+      } else {
+        where.channelId = { in: filters.accessibleChannelIds };
+      }
+    } else if (filters.channelId) {
+      where.channelId = filters.channelId;
+    }
     if (filters.assignedToId) where.assignedToId = filters.assignedToId;
     if (filters.search) {
       where.OR = [
@@ -101,10 +120,19 @@ export class ConversationsRepository {
     return this.prisma.conversation.update({ where: { id }, data });
   }
 
-  async countByStatus(organizationId: string) {
+  async countByStatus(organizationId: string, accessibleChannelIds?: string[]) {
+    if (accessibleChannelIds !== undefined && accessibleChannelIds.length === 0) {
+      return {} as Record<string, number>;
+    }
     const counts = await this.prisma.conversation.groupBy({
       by: ['status'],
-      where: { organizationId, deletedAt: null },
+      where: {
+        organizationId,
+        deletedAt: null,
+        ...(accessibleChannelIds !== undefined
+          ? { channelId: { in: accessibleChannelIds } }
+          : {}),
+      },
       _count: true,
     });
     return counts.reduce(

@@ -40,14 +40,21 @@ export class TranscriptionService {
   async transcribe(
     messageId: string,
     organizationId: string,
-    opts: { force?: boolean } = {},
+    opts: {
+      force?: boolean;
+      access?: import('../../iam/channel-access/channel-access.service').ChannelAccess;
+    } = {},
   ): Promise<TranscriptionResult> {
+    const access = opts.access ?? 'ALL';
     const message = await this.prisma.message.findUnique({
       where: { id: messageId },
       include: { conversation: { include: { channel: true } } },
     });
     if (!message) throw new BadRequestException('Message not found');
     if (message.conversation.organizationId !== organizationId) {
+      throw new BadRequestException('Message does not belong to organization');
+    }
+    if (access !== 'ALL' && !access.has(message.conversation.channelId)) {
       throw new BadRequestException('Message does not belong to organization');
     }
     if (message.type !== 'AUDIO') {

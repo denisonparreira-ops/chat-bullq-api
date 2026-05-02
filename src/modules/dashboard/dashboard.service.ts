@@ -114,6 +114,11 @@ export class DashboardService {
           ? Math.round(resolutionRatePercent - prevResolutionRatePercent)
           : 0,
 
+      fcrPercent,
+      csatScore,
+      csatResponses: csatAgg._count._all,
+      csatTrend,
+
       totalConversations,
       conversationsTrend: this.calcTrend(totalConversations, prevTotal),
       openConversations,
@@ -179,6 +184,108 @@ export class DashboardService {
     });
 
     return { active, firstResponse, sla, resolution };
+  }
+
+  async getCsatBreakdown(organizationId: string, range: DateRange) {
+    const [agg, ratings, recent] = await Promise.all([
+      this.prisma.conversationRating.aggregate({
+        where: { organizationId, respondedAt: { gte: range.from, lte: range.to } },
+        _avg: { score: true },
+        _count: { _all: true },
+      }),
+      this.prisma.conversationRating.groupBy({
+        by: ['score'],
+        where: { organizationId, respondedAt: { gte: range.from, lte: range.to } },
+        _count: true,
+      }),
+      this.prisma.conversationRating.findMany({
+        where: {
+          organizationId,
+          respondedAt: { gte: range.from, lte: range.to },
+          comment: { not: null },
+        },
+        orderBy: { respondedAt: 'desc' },
+        take: 5,
+        select: {
+          id: true, score: true, comment: true, respondedAt: true,
+          conversation: { select: { contact: { select: { name: true } } } },
+        },
+      }),
+    ]);
+
+    const totalRequested = await this.prisma.conversationRating.count({
+      where: { organizationId, requestedAt: { gte: range.from, lte: range.to } },
+    });
+
+    const distribution: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    for (const r of ratings) distribution[r.score] = r._count;
+
+    return {
+      avgScore: agg._avg.score !== null ? Math.round(agg._avg.score * 10) / 10 : null,
+      totalResponses: agg._count._all,
+      totalRequested,
+      responseRate: totalRequested > 0
+        ? Math.round((agg._count._all / totalRequested) * 100)
+        : null,
+      distribution,
+      recentComments: recent.map((r) => ({
+        id: r.id,
+        score: r.score,
+        comment: r.comment,
+        respondedAt: r.respondedAt,
+        contactName: r.conversation.contact.name,
+      })),
+    };
+  }
+
+  async getReopens(organizationId: string, range: DateRange) {
+    const reopened = await this.prisma.conversation.findMany({
+      where: {
+        organizationId,
+        reopenedCount: { gt: 0 },
+        reopenedAt: { gte: range.from, lte: range.to },
+      },
+      select: {
+        id: true,
+        reopenedAt: true,
+        reopenedCount: true,
+        assignedTo: { select: { id: true, name: true } },
+        contact: { select: { id: true, name: true } },
+      },
+    });
+
+    const closedInPeriod = await this.prisma.conversation.count({
+      where: { organizationId, status: 'CLOSED', closedAt: { gte: range.from, lte: range.to } },
+    });
+
+    const dayKeys = this.eachDay(range.from, range.to);
+    const series = new Map<string, number>(dayKeys.map((d) => [d, 0]));
+    for (const c of reopened) {
+      if (!c.reopenedAt) continue;
+      const k = c.reopenedAt.toISOString().slice(0, 10);
+      if (series.has(k)) series.set(k, series.get(k)! + 1);
+    }
+
+    const totalReopens = reopened.reduce((s, r) => s + r.reopenedCount, 0);
+    const reopenRate = closedInPeriod > 0
+      ? Math.round((reopened.length / (closedInPeriod + reopened.length)) * 100)
+      : null;
+
+    return {
+      totalReopens,
+      uniqueConversationsReopened: reopened.length,
+      reopenRate,
+      series: dayKeys.map((d) => ({ date: d, value: series.get(d)! })),
+      worstOffenders: reopened
+        .sort((a, b) => b.reopenedCount - a.reopenedCount)
+        .slice(0, 5)
+        .map((c) => ({
+          conversationId: c.id,
+          contactName: c.contact.name,
+          agentName: c.assignedTo?.name ?? null,
+          reopenedCount: c.reopenedCount,
+        })),
+    };
   }
 
   private eachDay(from: Date, to: Date): string[] {

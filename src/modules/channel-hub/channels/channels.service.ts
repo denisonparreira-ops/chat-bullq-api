@@ -5,7 +5,7 @@ import {
   BadRequestException,
   Logger,
 } from '@nestjs/common';
-import { ChannelType, ChannelSyncMode, ChannelSyncStatus } from '@prisma/client';
+import { ChannelType, ChannelSyncMode, ChannelSyncStatus, OrgRole } from '@prisma/client';
 import { PrismaService } from '../../../database/prisma.service';
 import { ChannelsRepository } from './channels.repository';
 import { CreateChannelDto } from './dto/create-channel.dto';
@@ -15,6 +15,7 @@ import { ZappfyHttpClient } from '../adapters/zappfy/zappfy.http-client';
 import { WhatsAppOfficialHttpClient } from '../adapters/whatsapp-official/whatsapp-official.http-client';
 import { InstagramHttpClient } from '../adapters/instagram/instagram.http-client';
 import { ChannelSyncOrchestrator } from '../sync/channel-sync.orchestrator';
+import type { ChannelAccess } from '../../iam/channel-access/channel-access.service';
 
 @Injectable()
 export class ChannelsService {
@@ -30,7 +31,11 @@ export class ChannelsService {
     private readonly prisma: PrismaService,
   ) {}
 
-  async create(organizationId: string, dto: CreateChannelDto) {
+  async create(
+    organizationId: string,
+    dto: CreateChannelDto,
+    creator?: { userOrganizationId: string; role: OrgRole },
+  ) {
     let channel = await this.repository.create({
       organizationId,
       type: dto.type,
@@ -38,6 +43,19 @@ export class ChannelsService {
       config: dto.config,
       webhookSecret: dto.webhookSecret,
     });
+
+    // Deny-by-default: a brand new channel has no agents, so AGENT users in the
+    // org cannot see it. The creator gets an explicit grant only if they are
+    // an AGENT (OWNER/ADMIN bypass via role); admins manage other agents'
+    // access via the channel-access endpoints.
+    if (creator && creator.role === OrgRole.AGENT) {
+      await this.prisma.channelAgent.create({
+        data: {
+          channelId: channel.id,
+          userOrganizationId: creator.userOrganizationId,
+        },
+      });
+    }
 
     // Enrich config with provider-side identifiers that the webhook router
     // needs to match incoming events. Without these, the new routing (P0-1)
@@ -146,15 +164,19 @@ export class ChannelsService {
     );
   }
 
-  async findAll(organizationId: string) {
-    return this.repository.findByOrganization(organizationId);
+  async findAll(organizationId: string, access: ChannelAccess) {
+    const accessibleIds = access === 'ALL' ? undefined : [...access];
+    return this.repository.findByOrganization(organizationId, accessibleIds);
   }
 
-  async findOne(id: string, organizationId: string) {
+  async findOne(id: string, organizationId: string, access?: ChannelAccess) {
     const channel = await this.repository.findById(id);
     if (!channel) throw new NotFoundException('Channel not found');
     if (channel.organizationId !== organizationId) {
       throw new ForbiddenException();
+    }
+    if (access !== undefined && access !== 'ALL' && !access.has(id)) {
+      throw new ForbiddenException('You do not have access to this channel');
     }
     return channel;
   }
