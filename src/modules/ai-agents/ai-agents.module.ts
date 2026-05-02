@@ -8,15 +8,20 @@ import { AiAgentRunnerService } from './runner/agent-runner.service';
 import { AgentRouterService } from './router/agent-router.service';
 import { AgentsService } from './agents/agents.service';
 import { AgentsController } from './agents/agents.controller';
+import { ToolsCatalogService } from './catalog/tools.service';
+import { SkillsCatalogService } from './catalog/skills.service';
+import { AiCatalogController } from './catalog/catalog.controller';
 
 @Module({
   imports: [ConfigModule, PrismaModule, LlmModule, ToolsModule],
-  controllers: [AgentsController],
+  controllers: [AgentsController, AiCatalogController],
   providers: [
     PromptBuilderService,
     AiAgentRunnerService,
     AgentRouterService,
     AgentsService,
+    ToolsCatalogService,
+    SkillsCatalogService,
   ],
   exports: [AiAgentRunnerService, AgentRouterService],
 })
