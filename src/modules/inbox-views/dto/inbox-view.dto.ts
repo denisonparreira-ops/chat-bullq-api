@@ -39,6 +39,18 @@ export class InboxViewFiltersDto {
   @IsString()
   @IsIn(['inbound', 'outbound', 'any'])
   lastDirection?: string;
+
+  /**
+   * Static inbox: when set, the view shows ONLY these conversations.
+   * Used by bulk-action "create inbox from selection" — operator picks N
+   * conversations and pins them in a fixed list. Other filters are still
+   * intersected (so a closed conversation in the list won't show up if
+   * statuses=[OPEN]).
+   */
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  conversationIds?: string[];
 }
 
 export class CreateInboxViewDto {

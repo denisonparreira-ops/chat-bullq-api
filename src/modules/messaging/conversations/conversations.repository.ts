@@ -9,6 +9,10 @@ export interface InboxFilters {
   /** Used by inbox views that pin multiple channels at once. Combines
    *  with accessibleChannelIds via intersection. */
   channelIds?: string[];
+  /** Static list of conversation ids — used by inbox views built via
+   *  bulk-action "create inbox from selection". When set, only these
+   *  conversations match (still intersected with the other filters). */
+  conversationIds?: string[];
   assignedToId?: string;
   search?: string;
   accessibleChannelIds?: string[];
@@ -66,6 +70,12 @@ export class ConversationsRepository {
     } else if (requested) {
       where.channelId =
         requested.length === 1 ? requested[0] : { in: requested };
+    }
+    if (filters.conversationIds !== undefined) {
+      if (filters.conversationIds.length === 0) {
+        return { conversations: [], total: 0 };
+      }
+      where.id = { in: filters.conversationIds };
     }
     if (filters.assignedToId) where.assignedToId = filters.assignedToId;
     if (filters.search) {
