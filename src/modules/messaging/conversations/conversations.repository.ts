@@ -16,6 +16,8 @@ export interface InboxFilters {
   /** Filter by conversation kind: individual (1-on-1) vs group (WA group
    *  / IG group thread). Undefined = both. */
   kind?: 'INDIVIDUAL' | 'GROUP';
+  /** Tag ids applied to the conversation OR its contact. ANY match. */
+  tagIds?: string[];
   assignedToId?: string;
   search?: string;
   accessibleChannelIds?: string[];
@@ -87,6 +89,16 @@ export class ConversationsRepository {
     }
     if (filters.kind === 'INDIVIDUAL') where.isGroup = false;
     else if (filters.kind === 'GROUP') where.isGroup = true;
+    if (filters.tagIds && filters.tagIds.length > 0) {
+      // Match conversations that carry ANY of the requested tags. Includes
+      // tags applied directly on the conversation OR on its contact —
+      // operators tag both ways and expect the inbox to surface either.
+      where.OR = [
+        ...(where.OR ?? []) as any[],
+        { tags: { some: { tagId: { in: filters.tagIds } } } },
+        { contact: { tags: { some: { tagId: { in: filters.tagIds } } } } },
+      ];
+    }
     if (filters.assignedToId) where.assignedToId = filters.assignedToId;
     if (filters.search) {
       where.OR = [

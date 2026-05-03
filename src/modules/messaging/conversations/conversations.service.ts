@@ -61,6 +61,7 @@ export class ConversationsService {
       channelIds?: string[];
       conversationIds?: string[];
       kind?: 'INDIVIDUAL' | 'GROUP';
+      tagIds?: string[];
       assignedToId?: string;
       search?: string;
     },
@@ -82,6 +83,7 @@ export class ConversationsService {
       channelIds: filters.channelIds,
       conversationIds: filters.conversationIds,
       kind: filters.kind,
+      tagIds: filters.tagIds,
       assignedToId: filters.assignedToId,
       search: filters.search,
       accessibleChannelIds: access === 'ALL' ? undefined : [...access],
