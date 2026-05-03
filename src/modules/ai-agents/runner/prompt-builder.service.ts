@@ -165,9 +165,22 @@ EXEMPLO BOM (curto, humano, uma pergunta de cada vez):
 Mensagens vindas do Instagram costumam chegar marcadas com "[respondeu a um story do Instagram]" no início do texto. Isso significa que o cliente reagiu a uma postagem que VOCÊ não viu — ele respondeu uma frase curta tipo "Hoje", "Sim", "Bora" pensando que vc sabe de qual story está falando. Quase sempre é resposta a uma campanha em andamento (live de hoje, oferta do dia, lançamento).
 
 Como agir:
-- NÃO pergunte "o que vc quis dizer?" nem "não entendi". Isso parece amador.
-- Assuma que é resposta a uma campanha ativa. Se a conversa anterior tem mensagens template (ManyChat) sobre live/oferta — use esse contexto pra responder.
-- Se realmente não dá pra inferir o assunto, peça com leveza: "opa! vc tá falando da live de hoje ou de algum outro tema? me conta um pouco mais."
+- NÃO pergunte "qual story?" / "o que vc quis dizer?" / "não entendi" se você
+  tem QUALQUER fonte de contexto disponível. É amador e quebra a confiança.
+- ORDEM DE BUSCA do contexto, faça TODAS antes de cogitar perguntar:
+  1. "═══ Contexto do negócio ═══" acima — JP documenta lá quais campanhas
+     estão ativas e qual palavra-chave entrega o quê. Se "Hoje" aparecer
+     descrito ali, USE.
+  2. Mensagens TEMPLATE outbound nos últimos turnos — broadcasts dela mesma
+     ("Esse conteúdo gratuito é só pra seguidores", "Aula: Como criar
+     agents…") são contexto direto da campanha em andamento.
+  3. As últimas 5-10 mensagens da conversa em geral.
+- Só pergunta se NADA dos 3 acima existir. E mesmo assim, faça uma pergunta
+  específica e útil ("opa! tá falando da aula de hoje sobre Claude Code?"),
+  não genérica ("qual story?").
+- Quando a regra do "Contexto do negócio" descrever a entrega, EXECUTE direto
+  ("show, tô te mandando o link da live no grupo agora") em vez de
+  perguntar de novo.
 - Marca tag 'story-reply' + 'instagram' pra tracking.
 
 Mesma lógica vale pra "[respondeu à mensagem ...]" — o cliente está respondendo um pedaço específico, leia esse contexto antes de produzir resposta.
@@ -464,13 +477,27 @@ export class PromptBuilderService {
             : null;
       const header =
         typeof tpl.header === 'string' && tpl.header ? tpl.header : null;
+      // Carousel/list templates do Instagram (e WhatsApp) trazem o
+      // conteúdo principal dentro de elements[].title/subtitle, NÃO em
+      // tpl.text. Sem extrair daqui, o LLM via só "[template]" no
+      // broadcast da campanha (ex: "Aula: Como criar agents…").
+      const elements = Array.isArray(tpl.elements)
+        ? (tpl.elements as any[])
+            .map((el) => {
+              const t = typeof el?.title === 'string' ? el.title : '';
+              const s = typeof el?.subtitle === 'string' ? el.subtitle : '';
+              return [t, s].filter(Boolean).join(' — ');
+            })
+            .filter(Boolean)
+            .join('\n')
+        : '';
       const buttons = Array.isArray(tpl.buttons)
         ? (tpl.buttons as any[])
             .map((b) => b?.title || b?.url || b?.payload)
             .filter(Boolean)
             .join(' / ')
         : '';
-      const parts = [header, body].filter(Boolean).join('\n');
+      const parts = [header, body, elements].filter(Boolean).join('\n');
       const buttonsLine = buttons ? `\n[botões: ${buttons}]` : '';
       if (parts || buttons) return `${prefix}${parts}${buttonsLine}`;
       return `${prefix}[template sem texto extraído]`;
