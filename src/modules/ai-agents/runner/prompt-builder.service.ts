@@ -22,6 +22,14 @@ export interface PromptContext {
   triggerMessage: Message;
   /** Extra prompt fragments contributed by the agent's active skills. */
   skillInstructions?: string[];
+  /** Compact product catalog for sales agents — name + slug + 1 line each.
+   *  Full pitch is fetched on demand via the getProductPitch skill. */
+  catalog?: Array<{
+    slug: string;
+    name: string;
+    category: string | null;
+    shortLine: string;
+  }>;
 }
 
 const SYSTEM_TEMPLATE = `Você é <%= it.agent.name %>, atendente virtual da <%= it.organization.name %>.
@@ -112,6 +120,25 @@ EXEMPLO BOM (curto, humano, uma pergunta de cada vez):
 <% for (const inst of it.skillInstructions) { %>
 
 <%= inst %>
+<% } %>
+<% } %>
+<% if (it.catalog && it.catalog.length > 0) { %>
+
+═══ Catálogo de produtos da <%= it.organization.name %> ═══
+Use essa lista pra saber O QUE existe. Pra entregar pitch + preço + link
+de checkout, chame a skill \`getProductPitch\` com o slug do produto.
+Não invente preço, link nem pitch — sempre puxa via skill antes de citar.
+<% const byCat = {};
+for (const p of it.catalog) {
+  const c = p.category || 'Outros';
+  (byCat[c] = byCat[c] || []).push(p);
+} %>
+<% for (const cat of Object.keys(byCat)) { %>
+
+# <%= cat %>
+<% for (const p of byCat[cat]) { %>
+- \`<%= p.slug %>\` · <%= p.name %> — <%= p.shortLine %>
+<% } %>
 <% } %>
 <% } %>`;
 

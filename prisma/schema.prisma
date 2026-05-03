@@ -152,6 +152,7 @@ model Organization {
   inboxViews    InboxView[]
   pipelines     Pipeline[]
   cards         Card[]
+  products      Product[]
 
   @@map("organizations")
 }
@@ -1175,4 +1176,37 @@ model Card {
   @@index([contactId])
   @@index([conversationId])
   @@map("cards")
+}
+
+// ─── Product Catalog ─────────────────────────────
+//
+// Org-level product/service catalog. Sales agents see a compact list of
+// every product (name + 1-line) in their system prompt as a stable,
+// cacheable block — and can call the `getProductPitch` skill with a
+// product slug to fetch full pitch + price + checkout link when actually
+// recommending. Hybrid approach scales beyond 10-15 products without
+// blowing up the prompt budget.
+model Product {
+  id              String   @id @default(cuid())
+  organizationId  String   @map("organization_id")
+  slug            String              // "maestria", "plantao-mensal"
+  name            String              // "Maestr.IA — Mentoria de Claude Code"
+  category        String?             // "Mentoria", "Curso", "Plantão"
+  shortLine       String              // 1 frase pra lista inline no prompt
+  pitch           String   @db.Text   // texto completo entregue pela skill
+  price           String?             // texto livre: "R$ 4.500 ou 6x R$ 750"
+  paymentLink     String?  @map("payment_link")
+  targetAudience  String?  @map("target_audience")
+  differentiators String[] @default([])
+  isActive        Boolean  @default(true) @map("is_active")
+  order           Int      @default(0)
+  metadata        Json     @default("{}")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, slug])
+  @@index([organizationId, isActive, order])
+  @@map("products")
 }

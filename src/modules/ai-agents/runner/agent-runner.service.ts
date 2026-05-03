@@ -58,7 +58,7 @@ export class AiAgentRunnerService {
       return;
     }
 
-    const [organization, channel, contact, recentMessages, memory] =
+    const [organization, channel, contact, recentMessages, memory, catalog] =
       await Promise.all([
         this.prisma.organization.findUniqueOrThrow({
           where: { id: conversation.organizationId },
@@ -80,6 +80,21 @@ export class AiAgentRunnerService {
               agentId: agent.id,
               contactId: conversation.contactId,
             },
+          },
+        }),
+        // Compact product list for the cacheable system prompt block.
+        // Skill getProductPitch(slug) fetches full details on demand.
+        this.prisma.product.findMany({
+          where: {
+            organizationId: conversation.organizationId,
+            isActive: true,
+          },
+          orderBy: [{ order: 'asc' }, { createdAt: 'asc' }],
+          select: {
+            slug: true,
+            name: true,
+            category: true,
+            shortLine: true,
           },
         }),
       ]);
@@ -117,6 +132,7 @@ export class AiAgentRunnerService {
       memoryFacts: (memory?.facts as Record<string, unknown>) ?? null,
       triggerMessage,
       skillInstructions,
+      catalog,
     });
 
     const tools = llmTools;

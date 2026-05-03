@@ -8,6 +8,7 @@ import { TagConversationTool } from './builtin/tag-conversation.tool';
 import { ListAvailableAgentsTool } from './builtin/list-available-agents.tool';
 import { DelegateToAgentTool } from './builtin/delegate-to-agent.tool';
 import { HandBackToOrchestratorTool } from './builtin/hand-back-to-orchestrator.tool';
+import { GetProductPitchTool } from './builtin/get-product-pitch.tool';
 import { ToolRegistry } from './tool-registry.service';
 import { HttpToolExecutorService } from './http-tool-executor.service';
 import { SqlToolExecutorService } from './sql-tool-executor.service';
@@ -27,6 +28,7 @@ import { ConfigModule } from '@nestjs/config';
     ListAvailableAgentsTool,
     DelegateToAgentTool,
     HandBackToOrchestratorTool,
+    GetProductPitchTool,
     ToolRegistry,
     HttpToolExecutorService,
     SqlToolExecutorService,

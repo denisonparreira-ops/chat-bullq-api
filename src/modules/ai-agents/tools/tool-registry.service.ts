@@ -8,6 +8,7 @@ import { TagConversationTool } from './builtin/tag-conversation.tool';
 import { ListAvailableAgentsTool } from './builtin/list-available-agents.tool';
 import { DelegateToAgentTool } from './builtin/delegate-to-agent.tool';
 import { HandBackToOrchestratorTool } from './builtin/hand-back-to-orchestrator.tool';
+import { GetProductPitchTool } from './builtin/get-product-pitch.tool';
 
 /**
  * Registry of BUILT-IN skills (named "tools" in the code for legacy reasons).
@@ -29,6 +30,7 @@ export class ToolRegistry {
     listAgents: ListAvailableAgentsTool,
     delegate: DelegateToAgentTool,
     handBack: HandBackToOrchestratorTool,
+    getProductPitch: GetProductPitchTool,
   ) {
     this.register(reply, ['ORCHESTRATOR', 'WORKER']);
     this.register(transfer, ['ORCHESTRATOR', 'WORKER']);
@@ -36,6 +38,9 @@ export class ToolRegistry {
     this.register(listAgents, ['ORCHESTRATOR']);
     this.register(delegate, ['ORCHESTRATOR']);
     this.register(handBack, ['WORKER']);
+    // Catálogo: tanto orquestrador quanto worker de vendas precisam.
+    // Workers de suporte que não vendem ignoram (mas ter na cinta não dói).
+    this.register(getProductPitch, ['ORCHESTRATOR', 'WORKER']);
 
     this.logger.log(
       `Built-in skills loaded: ${[...this.tools.keys()].join(', ')}`,
