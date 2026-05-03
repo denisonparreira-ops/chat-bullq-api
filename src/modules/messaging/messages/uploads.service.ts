@@ -16,12 +16,13 @@ export interface UploadResult {
 }
 
 /**
- * Stores agent-uploaded media (audio today, images/video later) on the local
- * filesystem under `uploads/` and returns a public URL that the app serves
- * from `/api/v1/uploads/*`.
+ * Stores user-uploaded media (agent recordings) and inbound media we
+ * mirror locally (e.g., WhatsApp Cloud requires a Bearer token to
+ * download — browsers can't load it directly, so we re-host it here).
  *
- * Swap this with S3/R2 when we move to multi-instance deployment — the public
- * URL contract stays the same.
+ * Files are written under `uploads/` and served publicly through
+ * `/api/v1/uploads/*`. Swap with S3/R2 when we go multi-instance — the
+ * public URL contract stays the same.
  */
 @Injectable()
 export class UploadsService {
@@ -30,6 +31,11 @@ export class UploadsService {
   // 25MB matches OpenAI Whisper's upload cap, so audios we accept are also
   // transcribable without chunking.
   static readonly MAX_AUDIO_BYTES = 25 * 1024 * 1024;
+
+  // 64MB upper bound for any inbound media we mirror. WhatsApp Cloud caps
+  // documents at 100MB but most chat content is well under this — bigger
+  // files we'd want to stream rather than buffer in memory anyway.
+  static readonly MAX_INBOUND_BYTES = 64 * 1024 * 1024;
 
   private static readonly ALLOWED_AUDIO_MIME = new Set([
     'audio/mpeg',
@@ -54,6 +60,54 @@ export class UploadsService {
     if (!fs.existsSync(this.rootDir)) {
       fs.mkdirSync(this.rootDir, { recursive: true });
     }
+  }
+
+  /**
+   * Persists an inbound media buffer (any type — image, video, audio,
+   * document, sticker) under a per-channel/per-day folder and returns a
+   * playable public URL. Used by adapters whose providers deliver media
+   * gated behind auth (WhatsApp Cloud) or via short-lived signed URLs we
+   * don't want to depend on.
+   *
+   * `originalFilename` is preserved when the provider gives one (typical
+   * for documents) — useful for the UI to render a familiar filename and
+   * for the browser's "Save As" dialog to default sensibly.
+   */
+  async saveInboundMedia(input: {
+    buffer: Buffer;
+    mimeType: string;
+    channelId: string;
+    originalFilename?: string | null;
+  }): Promise<UploadResult> {
+    if (!input?.buffer?.byteLength) {
+      throw new BadRequestException('Empty inbound media');
+    }
+    if (input.buffer.byteLength > UploadsService.MAX_INBOUND_BYTES) {
+      throw new BadRequestException(
+        `Inbound media too large (max ${UploadsService.MAX_INBOUND_BYTES / 1024 / 1024}MB)`,
+      );
+    }
+
+    const mime = (input.mimeType || 'application/octet-stream').split(';')[0].trim();
+    const dateFolder = new Date().toISOString().slice(0, 10);
+    const safeChannel = (input.channelId || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const dir = path.join(this.rootDir, 'inbound', safeChannel, dateFolder);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+    const id = crypto.randomBytes(16).toString('hex');
+    const ext = this.extFor(mime, input.originalFilename);
+    const filename = `${id}${ext}`;
+    const fullPath = path.join(dir, filename);
+    await fs.promises.writeFile(fullPath, input.buffer);
+
+    const url = `${this.publicBaseUrl}/inbound/${safeChannel}/${dateFolder}/${filename}`;
+    this.logger.log(`Inbound media saved: ${fullPath} -> ${url}`);
+    return {
+      url,
+      mimeType: mime,
+      size: input.buffer.byteLength,
+      filename: input.originalFilename || filename,
+    };
   }
 
   async saveAudio(file: {
@@ -127,11 +181,43 @@ export class UploadsService {
     return { url, mimeType: finalMime, size: finalSize, filename: finalName };
   }
 
-  private extFor(mime: string): string {
-    if (mime.includes('ogg')) return '.ogg';
-    if (mime.includes('mp4') || mime.includes('m4a')) return '.m4a';
-    if (mime.includes('wav')) return '.wav';
-    if (mime.includes('webm')) return '.webm';
-    return '.mp3';
+  private extFor(mime: string, originalFilename?: string | null): string {
+    // Prefer the extension from the provider-given filename when present —
+    // it survives mime-sniffing oddities (e.g., Meta sometimes returns
+    // application/octet-stream for known doc types).
+    if (originalFilename) {
+      const ext = path.extname(originalFilename).toLowerCase();
+      if (ext && /^\.[a-z0-9]{1,8}$/i.test(ext)) return ext;
+    }
+    const m = (mime || '').toLowerCase();
+    // audio
+    if (m.includes('ogg')) return '.ogg';
+    if (m.includes('mpeg') && m.startsWith('audio/')) return '.mp3';
+    if (m.includes('m4a') || (m.includes('mp4') && m.startsWith('audio/'))) return '.m4a';
+    if (m.includes('wav')) return '.wav';
+    if (m.includes('webm') && m.startsWith('audio/')) return '.webm';
+    // image
+    if (m === 'image/jpeg' || m === 'image/jpg') return '.jpg';
+    if (m === 'image/png') return '.png';
+    if (m === 'image/gif') return '.gif';
+    if (m === 'image/webp') return '.webp';
+    if (m === 'image/heic') return '.heic';
+    // video
+    if (m === 'video/mp4') return '.mp4';
+    if (m === 'video/quicktime') return '.mov';
+    if (m === 'video/3gpp') return '.3gp';
+    if (m === 'video/webm') return '.webm';
+    // document
+    if (m === 'application/pdf') return '.pdf';
+    if (m === 'application/zip') return '.zip';
+    if (m === 'application/msword') return '.doc';
+    if (m === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') return '.docx';
+    if (m === 'application/vnd.ms-excel') return '.xls';
+    if (m === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') return '.xlsx';
+    if (m === 'application/vnd.ms-powerpoint') return '.ppt';
+    if (m === 'application/vnd.openxmlformats-officedocument.presentationml.presentation') return '.pptx';
+    if (m === 'text/plain') return '.txt';
+    if (m === 'text/csv') return '.csv';
+    return '.bin';
   }
 }

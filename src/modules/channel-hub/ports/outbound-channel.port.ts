@@ -1,6 +1,13 @@
 import { ChannelType, Channel } from '@prisma/client';
 import { NormalizedOutboundMessage, SendResult, RateLimitConfig } from './types';
 
+export interface ResolveMediaHint {
+  externalMessageId: string;
+  mediaId?: string;
+  mimeType?: string;
+  originalFilename?: string;
+}
+
 export interface OutboundChannelPort {
   readonly channelType: ChannelType;
 
@@ -23,13 +30,18 @@ export interface OutboundChannelPort {
    * Resolve an inbound message's media to a playable URL.
    *
    * Needed for channels like WhatsApp (Zappfy/Uazapi) where the webhook
-   * delivers an encrypted .enc CDN URL that browsers cannot play — we must
-   * hit the provider to get a decrypted URL. Channels where the webhook
-   * already carries a playable URL (Instagram) can just echo the stored one.
+   * delivers an encrypted .enc CDN URL that browsers cannot play, and for
+   * Meta Cloud where the URL requires a Bearer token and must be re-hosted.
+   * Channels where the webhook already carries a playable URL (Instagram)
+   * can just echo the stored one.
+   *
+   * `hint` carries everything the media-resolver pulled off the stored
+   * message — adapters use whichever fields are relevant: Uazapi only
+   * needs externalMessageId, Meta Cloud needs mediaId, etc.
    */
   resolveInboundMediaUrl?(
     channel: Channel,
-    externalMessageId: string,
+    hint: ResolveMediaHint,
   ): Promise<{ fileUrl: string; mimeType?: string }>;
 
   getRateLimits(): RateLimitConfig;

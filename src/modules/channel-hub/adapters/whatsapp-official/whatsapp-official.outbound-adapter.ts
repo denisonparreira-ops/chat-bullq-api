@@ -1,9 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { ChannelType, Channel } from '@prisma/client';
-import { OutboundChannelPort } from '../../ports/outbound-channel.port';
+import { OutboundChannelPort, ResolveMediaHint } from '../../ports/outbound-channel.port';
 import { NormalizedOutboundMessage, SendResult, RateLimitConfig } from '../../ports/types';
 import { WhatsAppOfficialMessageMapper } from './whatsapp-official.message-mapper';
 import { WhatsAppOfficialHttpClient } from './whatsapp-official.http-client';
+import { UploadsService } from '../../../messaging/messages/uploads.service';
 
 @Injectable()
 export class WhatsAppOfficialOutboundAdapter implements OutboundChannelPort {
@@ -13,6 +14,7 @@ export class WhatsAppOfficialOutboundAdapter implements OutboundChannelPort {
   constructor(
     private readonly mapper: WhatsAppOfficialMessageMapper,
     private readonly httpClient: WhatsAppOfficialHttpClient,
+    private readonly uploads: UploadsService,
   ) {}
 
   async sendMessage(
@@ -40,6 +42,33 @@ export class WhatsAppOfficialOutboundAdapter implements OutboundChannelPort {
   async downloadMedia(channel: Channel, mediaId: string): Promise<Buffer> {
     const url = await this.httpClient.getMediaUrl(channel, mediaId);
     return this.httpClient.downloadMedia(channel, url);
+  }
+
+  /**
+   * Meta Cloud's media URL is a Graph CDN link that requires the WABA's
+   * bearer token to GET — browsers cannot load it directly. We download
+   * once with the token and re-host the bytes under our own
+   * `/api/v1/uploads/inbound/...` so the frontend can render it like any
+   * other static asset and the cached URL keeps working past Meta's
+   * 5-minute signed-URL window.
+   */
+  async resolveInboundMediaUrl(
+    channel: Channel,
+    hint: ResolveMediaHint,
+  ): Promise<{ fileUrl: string; mimeType?: string }> {
+    if (!hint.mediaId) {
+      throw new BadRequestException(
+        'WhatsApp Official media resolution requires a stored mediaId',
+      );
+    }
+    const buffer = await this.downloadMedia(channel, hint.mediaId);
+    const saved = await this.uploads.saveInboundMedia({
+      buffer,
+      mimeType: hint.mimeType || 'application/octet-stream',
+      channelId: channel.id,
+      originalFilename: hint.originalFilename ?? null,
+    });
+    return { fileUrl: saved.url, mimeType: saved.mimeType };
   }
 
   getRateLimits(): RateLimitConfig {

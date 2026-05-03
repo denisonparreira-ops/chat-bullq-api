@@ -74,9 +74,9 @@ export class ZappfyOutboundAdapter implements OutboundChannelPort {
 
   async resolveInboundMediaUrl(
     channel: Channel,
-    externalMessageId: string,
+    hint: { externalMessageId: string },
   ): Promise<{ fileUrl: string; mimeType?: string }> {
-    return this.httpClient.resolveInboundMediaUrl(channel, externalMessageId);
+    return this.httpClient.resolveInboundMediaUrl(channel, hint.externalMessageId);
   }
 
   getRateLimits(): RateLimitConfig {

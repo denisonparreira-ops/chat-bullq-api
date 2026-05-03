@@ -66,7 +66,12 @@ export class MediaResolverService {
 
     const { fileUrl, mimeType } = await adapter.resolveInboundMediaUrl(
       channel,
-      externalId,
+      {
+        externalMessageId: externalId,
+        mediaId: typeof content.mediaId === 'string' ? content.mediaId : undefined,
+        mimeType: typeof content.mimeType === 'string' ? content.mimeType : undefined,
+        originalFilename: typeof content.fileName === 'string' ? content.fileName : undefined,
+      },
     );
 
     await this.prisma.message.update({
