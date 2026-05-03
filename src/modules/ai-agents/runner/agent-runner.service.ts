@@ -333,7 +333,23 @@ export class AiAgentRunnerService {
       });
       if (active) return active;
     }
-    const channelLink = await this.prisma.aiAgentChannel.findFirst({
+    // Hoje agents são auto-linkados a todos os canais. Sem prioridade,
+    // qualquer worker AUTONOMOUS poderia capturar o primeiro turno e
+    // ignorar a hierarquia. Sempre que houver ORCHESTRATOR no canal,
+    // ele entra primeiro — ele decide quem delegar.
+    const orchestratorLink = await this.prisma.aiAgentChannel.findFirst({
+      where: {
+        channelId: conversation.channelId,
+        mode: 'AUTONOMOUS',
+        agent: { isActive: true, deletedAt: null, kind: 'ORCHESTRATOR' },
+      },
+      include: { agent: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (orchestratorLink?.agent) return orchestratorLink.agent;
+
+    // Fallback: nenhum orquestrador linkado → worker primeiro disponível.
+    const workerLink = await this.prisma.aiAgentChannel.findFirst({
       where: {
         channelId: conversation.channelId,
         mode: 'AUTONOMOUS',
@@ -342,7 +358,7 @@ export class AiAgentRunnerService {
       include: { agent: true },
       orderBy: { createdAt: 'asc' },
     });
-    return channelLink?.agent ?? null;
+    return workerLink?.agent ?? null;
   }
 
   private async executeToolCalls(
