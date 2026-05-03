@@ -9,6 +9,7 @@ import { ListAvailableAgentsTool } from './builtin/list-available-agents.tool';
 import { DelegateToAgentTool } from './builtin/delegate-to-agent.tool';
 import { HandBackToOrchestratorTool } from './builtin/hand-back-to-orchestrator.tool';
 import { GetProductPitchTool } from './builtin/get-product-pitch.tool';
+import { CheckBonusEligibilityTool } from './builtin/check-bonus-eligibility.tool';
 import { ToolRegistry } from './tool-registry.service';
 import { HttpToolExecutorService } from './http-tool-executor.service';
 import { SqlToolExecutorService } from './sql-tool-executor.service';
@@ -29,6 +30,7 @@ import { ConfigModule } from '@nestjs/config';
     DelegateToAgentTool,
     HandBackToOrchestratorTool,
     GetProductPitchTool,
+    CheckBonusEligibilityTool,
     ToolRegistry,
     HttpToolExecutorService,
     SqlToolExecutorService,

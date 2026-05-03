@@ -9,6 +9,7 @@ import { ListAvailableAgentsTool } from './builtin/list-available-agents.tool';
 import { DelegateToAgentTool } from './builtin/delegate-to-agent.tool';
 import { HandBackToOrchestratorTool } from './builtin/hand-back-to-orchestrator.tool';
 import { GetProductPitchTool } from './builtin/get-product-pitch.tool';
+import { CheckBonusEligibilityTool } from './builtin/check-bonus-eligibility.tool';
 
 /**
  * Registry of BUILT-IN skills (named "tools" in the code for legacy reasons).
@@ -31,6 +32,7 @@ export class ToolRegistry {
     delegate: DelegateToAgentTool,
     handBack: HandBackToOrchestratorTool,
     lookupOffering: GetProductPitchTool,
+    checkBonusEligibility: CheckBonusEligibilityTool,
   ) {
     this.register(reply, ['ORCHESTRATOR', 'WORKER']);
     this.register(transfer, ['ORCHESTRATOR', 'WORKER']);
@@ -41,6 +43,9 @@ export class ToolRegistry {
     // Detalhes oficiais (preço/condições/link) das soluções da org —
     // ORCHESTRATOR e WORKER de vendas usam pra não inventar valor/link.
     this.register(lookupOffering, ['ORCHESTRATOR', 'WORKER']);
+    // Cálculo determinístico de elegibilidade de bônus (D+7 corridos).
+    // Disponível pra todos — bonus é dúvida frequente em qualquer fluxo.
+    this.register(checkBonusEligibility, ['ORCHESTRATOR', 'WORKER']);
 
     this.logger.log(
       `Built-in skills loaded: ${[...this.tools.keys()].join(', ')}`,
