@@ -1,5 +1,6 @@
 import {
   Controller,
+  Delete,
   Get,
   Patch,
   Post,
@@ -9,6 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
+import { OrgRole } from '@prisma/client';
 import { ConversationsService } from './conversations.service';
 import { UpdateConversationDto } from './dto/update-conversation.dto';
 import { JwtAuthGuard, OrgGuard, RolesGuard } from '../../../common/guards';
@@ -16,6 +18,7 @@ import {
   CurrentUser,
   CurrentOrg,
   CurrentChannelAccess,
+  Roles,
 } from '../../../common/decorators';
 import type { ChannelAccess } from '../../iam/channel-access/channel-access.service';
 
@@ -44,6 +47,12 @@ export class ConversationsController {
     required: false,
     description: 'When "true", returns only conversations with unread inbound messages for the current user',
   })
+  @ApiQuery({
+    name: 'groups',
+    required: false,
+    description:
+      'include (default — todas) | exclude (esconde grupos) | only (apenas grupos)',
+  })
   findInbox(
     @CurrentOrg('id') orgId: string,
     @CurrentUser('id') userId: string,
@@ -56,9 +65,16 @@ export class ConversationsController {
     @Query('limit') limit?: string,
     @Query('archived') archived?: string,
     @Query('unread') unread?: string,
+    @Query('groups') groups?: string,
   ) {
     const archivedScope =
       archived === 'only' || archived === 'any' ? archived : 'exclude';
+    // groups param maps to repository's existing `kind` filter:
+    //   exclude → kind=INDIVIDUAL (esconde grupos)
+    //   only    → kind=GROUP (apenas grupos)
+    //   include / default → undefined (todas)
+    const kind: 'INDIVIDUAL' | 'GROUP' | undefined =
+      groups === 'exclude' ? 'INDIVIDUAL' : groups === 'only' ? 'GROUP' : undefined;
     return this.service.findInbox(
       orgId,
       {
@@ -68,6 +84,7 @@ export class ConversationsController {
         search,
         archived: archivedScope,
         unreadOnly: unread === 'true' || unread === '1',
+        kind,
       },
       parseInt(page || '1', 10),
       parseInt(limit || '20', 10),
@@ -245,5 +262,26 @@ export class ConversationsController {
     @CurrentChannelAccess() access: ChannelAccess,
   ) {
     return this.service.syncMessages(id, orgId, access);
+  }
+
+  @Delete(':id')
+  @Roles(OrgRole.OWNER, OrgRole.ADMIN)
+  @ApiOperation({
+    summary:
+      'HARD-delete a conversation: cascades to messages, attachments, tags, AI runs, reads. Irreversible — requires ?confirm=<exact contact name or phone>.',
+  })
+  @ApiQuery({
+    name: 'confirm',
+    required: true,
+    description:
+      'Type the contact name or phone exactly to authorize the destructive action.',
+  })
+  remove(
+    @Param('id') id: string,
+    @CurrentOrg('id') orgId: string,
+    @CurrentChannelAccess() access: ChannelAccess,
+    @Query('confirm') confirm: string,
+  ) {
+    return this.service.hardDelete(id, orgId, access, confirm);
   }
 }
