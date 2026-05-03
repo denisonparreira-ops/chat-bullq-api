@@ -169,16 +169,29 @@ export class PromptBuilderService {
     ];
 
     // Recent message history → user/assistant turns. We merge consecutive
-    // messages from the same author into a single turn for clarity.
+    // messages from the same author into a single turn — Anthropic models
+    // (and OpenRouter when proxying to them) reject conversations with two
+    // adjacent turns of the same role with a 400 "messages: roles must
+    // alternate". Customers regularly send 2-3 messages in a row, so this
+    // merge is load-bearing.
     for (const m of ctx.recentMessages) {
       const text = this.extractText(m);
       if (!text) continue;
 
-      const isInbound = m.direction === 'INBOUND';
-      messages.push({
-        role: isInbound ? 'user' : 'assistant',
-        content: text,
-      });
+      const role: 'user' | 'assistant' =
+        m.direction === 'INBOUND' ? 'user' : 'assistant';
+      const last = messages[messages.length - 1];
+      if (last && last.role === role) {
+        const lastText =
+          typeof last.content === 'string'
+            ? last.content
+            : Array.isArray(last.content)
+              ? last.content.map((p: any) => p?.text ?? '').join('')
+              : '';
+        last.content = `${lastText}\n${text}`;
+      } else {
+        messages.push({ role, content: text });
+      }
     }
 
     return messages;
