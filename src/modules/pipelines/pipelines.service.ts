@@ -57,6 +57,16 @@ export class PipelinesService {
         include: {
           contact: { select: { id: true, name: true, phone: true, avatarUrl: true } },
           assignedTo: { select: { id: true, name: true, avatarUrl: true } },
+          // Channel comes via the linked conversation — the kanban card UI
+          // surfaces the icon (Zappfy/Meta/Instagram) so the operator can
+          // tell at a glance where the conversation lives without opening it.
+          conversation: {
+            select: {
+              id: true,
+              channelId: true,
+              channel: { select: { id: true, type: true, name: true } },
+            },
+          },
         },
       }),
     ]);
