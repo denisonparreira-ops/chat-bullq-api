@@ -4,6 +4,7 @@ import { ZappfyOutboundAdapter } from './zappfy.outbound-adapter';
 import { ZappfyMessageMapper } from './zappfy.message-mapper';
 import { ZappfyHttpClient } from './zappfy.http-client';
 import { ZappfySyncAdapter } from './zappfy.sync-adapter';
+import { ZappfyContactEnricherService } from './zappfy-contact-enricher.service';
 
 @Module({
   providers: [
@@ -12,12 +13,14 @@ import { ZappfySyncAdapter } from './zappfy.sync-adapter';
     ZappfyMessageMapper,
     ZappfyHttpClient,
     ZappfySyncAdapter,
+    ZappfyContactEnricherService,
   ],
   exports: [
     ZappfyInboundAdapter,
     ZappfyOutboundAdapter,
     ZappfyHttpClient,
     ZappfySyncAdapter,
+    ZappfyContactEnricherService,
   ],
 })
 export class ZappfyModule {}

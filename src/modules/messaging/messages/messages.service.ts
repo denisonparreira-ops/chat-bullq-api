@@ -105,6 +105,33 @@ export class MessagesService {
       },
     });
 
+    // Replying = reading. The sender obviously saw the inbound stream
+    // before typing — bump their lastReadAt so the unread badge resets
+    // even if they never clicked the conversation first.
+    await this.prisma.conversationRead.upsert({
+      where: {
+        userId_conversationId: {
+          userId: senderId,
+          conversationId: conversation.id,
+        },
+      },
+      create: {
+        userId: senderId,
+        conversationId: conversation.id,
+        lastReadMessageId: message.id,
+        lastReadAt: new Date(),
+      },
+      update: {
+        lastReadMessageId: message.id,
+        lastReadAt: new Date(),
+      },
+    });
+    this.realtimeGateway.emitToUser(senderId, 'conversation:read', {
+      conversationId: conversation.id,
+      userId: senderId,
+      lastReadAt: new Date(),
+    });
+
     if (shouldAutoAssign) {
       this.realtimeGateway.emitToConversation(
         conversation.id,
