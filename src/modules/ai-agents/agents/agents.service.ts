@@ -14,6 +14,9 @@ export class AgentsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(organizationId: string, dto: CreateAgentDto) {
+    if (dto.parentAgentId) {
+      await this.assertParentExists(organizationId, dto.parentAgentId);
+    }
     return this.prisma.aiAgent.create({
       data: {
         organizationId,
@@ -30,6 +33,9 @@ export class AgentsService {
         maxTokens: dto.maxTokens ?? 2048,
         canRespondDirectly: dto.canRespondDirectly ?? true,
         isActive: dto.isActive ?? true,
+        parentAgentId: dto.parentAgentId ?? null,
+        department: dto.department ?? null,
+        squad: dto.squad ?? null,
       },
     });
   }
@@ -65,6 +71,28 @@ export class AgentsService {
 
   async update(organizationId: string, id: string, dto: UpdateAgentDto) {
     await this.findOne(organizationId, id);
+
+    // Validate org-tree integrity when changing parent.
+    // Two failure modes: (a) self-reference, (b) cycle via descendant.
+    if (dto.parentAgentId !== undefined && dto.parentAgentId !== null) {
+      if (dto.parentAgentId === id) {
+        throw new BadRequestException(
+          'Um agent não pode reportar a si mesmo',
+        );
+      }
+      await this.assertParentExists(organizationId, dto.parentAgentId);
+      const wouldCycle = await this.isDescendantOf(
+        organizationId,
+        dto.parentAgentId,
+        id,
+      );
+      if (wouldCycle) {
+        throw new BadRequestException(
+          'Hierarquia inválida: o agent escolhido como chefe é subordinado deste agent (criaria um ciclo)',
+        );
+      }
+    }
+
     return this.prisma.aiAgent.update({
       where: { id },
       data: {
@@ -72,6 +100,48 @@ export class AgentsService {
         modelParams: dto.modelParams as object | undefined,
       },
     });
+  }
+
+  /** Verifies a candidate parent exists in the same org and isn't soft-deleted. */
+  private async assertParentExists(organizationId: string, parentId: string) {
+    const parent = await this.prisma.aiAgent.findFirst({
+      where: { id: parentId, organizationId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!parent) {
+      throw new BadRequestException(
+        'Agent escolhido como chefe não foi encontrado nesta organização',
+      );
+    }
+  }
+
+  /**
+   * Walks `candidateId`'s ancestor chain to see if `ancestorId` appears.
+   * Used to block cycles when reassigning a parent — if the new parent is
+   * already a descendant of the agent being edited, the assignment would
+   * close a loop.
+   */
+  private async isDescendantOf(
+    organizationId: string,
+    candidateId: string,
+    ancestorId: string,
+  ): Promise<boolean> {
+    let cursor: string | null = candidateId;
+    const visited = new Set<string>();
+    // bounded loop — depth cap protects against unexpected DB cycles.
+    for (let depth = 0; depth < 50 && cursor; depth++) {
+      if (visited.has(cursor)) return false;
+      visited.add(cursor);
+      const node: { parentAgentId: string | null } | null =
+        await this.prisma.aiAgent.findFirst({
+          where: { id: cursor, organizationId, deletedAt: null },
+          select: { parentAgentId: true },
+        });
+      if (!node?.parentAgentId) return false;
+      if (node.parentAgentId === ancestorId) return true;
+      cursor = node.parentAgentId;
+    }
+    return false;
   }
 
   async softDelete(organizationId: string, id: string) {

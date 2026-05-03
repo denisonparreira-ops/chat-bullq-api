@@ -90,4 +90,31 @@ export class CreateAgentDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  // ─── Organograma matricial ágil ────────────────────────────
+
+  @ApiPropertyOptional({
+    description:
+      'ID do agent ao qual este reporta (chefia direta). Null = raiz/CEO.',
+  })
+  @IsOptional()
+  @IsString()
+  parentAgentId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Departamento da empresa: VENDAS, SUPORTE, CS, CONTABIL, JURIDICO, FINANCEIRO, OPERACOES, TECNOLOGIA, MARKETING, OUTRO',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  department?: string;
+
+  @ApiPropertyOptional({
+    description: 'Squad ágil — time multi-funcional ortogonal ao departamento',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  squad?: string;
 }
