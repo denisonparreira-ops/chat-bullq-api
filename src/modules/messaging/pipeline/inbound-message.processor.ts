@@ -44,12 +44,14 @@ interface StatusJobData {
  *    short message triggers a separate run, racing each other.
  * 2) External flows (ManyChat, n8n, Zapier) often own the first reply on
  *    a new conversation. If our agent answers in <1s the customer sees
- *    two replies fighting for attention. 3s gives those flows room.
+ *    two replies fighting for attention. The longer wait gives them room.
  *
  * Each new inbound message on the same conversation resets the timer —
- * we only run the agent once per "burst".
+ * we only run the agent once per "burst". 8s covers the typical chat
+ * cadence where someone types one thought, hits send, and continues
+ * (an earlier 3s window let those bursts slip through and double-answer).
  */
-const AGENT_DEBOUNCE_MS = 3000;
+const AGENT_DEBOUNCE_MS = 8000;
 
 /**
  * Message types that should NEVER trigger an agent run. REACTION (the
