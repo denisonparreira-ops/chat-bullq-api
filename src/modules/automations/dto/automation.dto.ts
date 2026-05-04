@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { AutomationTrigger } from '@prisma/client';
 import {
+  Allow,
   IsBoolean,
   IsEnum,
   IsInt,
@@ -31,11 +32,16 @@ export class CreateAutomationDto {
   // AutomationsValidator rather than class-validator (the structure is
   // dynamic per trigger and per action type, so a static decorator
   // schema would either be over-permissive or unmaintainable).
+  // @Allow() is needed because main.ts uses forbidNonWhitelisted=true,
+  // which would otherwise drop these undecorated properties before they
+  // reach the controller.
   @ApiPropertyOptional({ description: '2-level OR>AND group structure' })
   @IsOptional()
+  @Allow()
   conditions?: unknown;
 
   @ApiProperty({ description: 'ordered array of action definitions' })
+  @Allow()
   actions!: unknown;
 
   @ApiPropertyOptional({ default: false })
@@ -76,10 +82,12 @@ export class UpdateAutomationDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @Allow()
   conditions?: unknown;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @Allow()
   actions?: unknown;
 
   @ApiPropertyOptional()
@@ -105,5 +113,6 @@ export class DryRunDto {
     description:
       'Mock event payload to evaluate against this automation. Shape must match the automation trigger.',
   })
+  @Allow()
   payload!: Record<string, unknown>;
 }
