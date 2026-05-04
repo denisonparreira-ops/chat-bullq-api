@@ -72,6 +72,13 @@ export class InboundMessageProcessor extends WorkerHost {
    *  design — a restart means we'd rather reply once late than not at all. */
   private readonly pendingRuns = new Map<string, NodeJS.Timeout>();
 
+  /** Conversations with an agent run currently in flight. While set, new
+   *  inbound messages just flag {@link followupNeeded} instead of starting
+   *  a parallel run — when the in-flight run finishes, we re-check and
+   *  schedule one more debounced run if the customer kept typing. */
+  private readonly running = new Set<string>();
+  private readonly followupNeeded = new Set<string>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly idempotency: IdempotencyService,
@@ -458,8 +465,20 @@ export class InboundMessageProcessor extends WorkerHost {
    * with a new one. The latest message always wins — older bursts get
    * dropped because by the time the timer fires, we re-fetch the latest
    * trigger anyway. Simple, no extra queue, no Redis state.
+   *
+   * If an agent run is already in flight for this conversation, we don't
+   * stack another one — we just flag that a follow-up is needed. The
+   * in-flight run sees the flag when it finishes and re-schedules.
    */
   private scheduleAgentRun(conversationId: string, triggerMessageId: string) {
+    if (this.running.has(conversationId)) {
+      this.followupNeeded.add(conversationId);
+      this.logger.debug(
+        `Agent already running for conv ${conversationId}; deferring trigger ${triggerMessageId}`,
+      );
+      return;
+    }
+
     const existing = this.pendingRuns.get(conversationId);
     if (existing) {
       clearTimeout(existing);
@@ -468,54 +487,78 @@ export class InboundMessageProcessor extends WorkerHost {
       );
     }
 
-    const timer = setTimeout(async () => {
+    const timer = setTimeout(() => {
       this.pendingRuns.delete(conversationId);
-      try {
-        // Re-fetch state — between scheduling and firing, the conversation
-        // may have been claimed by a human, paused, or resolved.
-        const conv = await this.prisma.conversation.findUnique({
-          where: { id: conversationId },
-        });
-        if (!conv) return;
-
-        const decision = await this.agentRouter.shouldHandle(conv);
-        if (!decision.handle) {
-          this.logger.debug(
-            `AI skipped after debounce for conv ${conversationId}: ${decision.reason}`,
-          );
-          return;
-        }
-
-        // Always run against the LATEST actionable inbound — exclude
-        // reactions/system events that arrived during the debounce window.
-        // Otherwise the agent answers the 👍 instead of the real message.
-        const latestInbound = await this.prisma.message.findFirst({
-          where: {
-            conversationId,
-            direction: 'INBOUND',
-            type: { notIn: NON_TRIGGERING_MESSAGE_TYPES },
-          },
-          orderBy: { createdAt: 'desc' },
-        });
-        if (!latestInbound) {
-          this.logger.debug(
-            `AI skipped after debounce for conv ${conversationId}: no actionable inbound`,
-          );
-          return;
-        }
-
-        await this.agentRunner.run({
-          conversation: conv,
-          triggerMessage: latestInbound,
-        });
-      } catch (err: any) {
-        this.logger.error(
-          `Debounced agent run failed for conv ${conversationId}: ${err?.message ?? err}`,
-        );
-      }
+      this.fireAgentRun(conversationId);
     }, AGENT_DEBOUNCE_MS);
 
     this.pendingRuns.set(conversationId, timer);
+  }
+
+  /**
+   * Actually run the agent. Wrapped to:
+   *  - mark the conversation as running so no parallel run starts
+   *  - re-check after completion: if a new inbound landed during the run,
+   *    schedule another debounced run on the latest message
+   */
+  private async fireAgentRun(conversationId: string): Promise<void> {
+    if (this.running.has(conversationId)) return;
+    this.running.add(conversationId);
+    this.followupNeeded.delete(conversationId);
+
+    try {
+      // Re-fetch state — between scheduling and firing, the conversation
+      // may have been claimed by a human, paused, or resolved.
+      const conv = await this.prisma.conversation.findUnique({
+        where: { id: conversationId },
+      });
+      if (!conv) return;
+
+      const decision = await this.agentRouter.shouldHandle(conv);
+      if (!decision.handle) {
+        this.logger.debug(
+          `AI skipped after debounce for conv ${conversationId}: ${decision.reason}`,
+        );
+        return;
+      }
+
+      // Always run against the LATEST actionable inbound — exclude
+      // reactions/system events that arrived during the debounce window.
+      // Otherwise the agent answers the 👍 instead of the real message.
+      const latestInbound = await this.prisma.message.findFirst({
+        where: {
+          conversationId,
+          direction: 'INBOUND',
+          type: { notIn: NON_TRIGGERING_MESSAGE_TYPES },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (!latestInbound) {
+        this.logger.debug(
+          `AI skipped after debounce for conv ${conversationId}: no actionable inbound`,
+        );
+        return;
+      }
+
+      await this.agentRunner.run({
+        conversation: conv,
+        triggerMessage: latestInbound,
+      });
+    } catch (err: any) {
+      this.logger.error(
+        `Debounced agent run failed for conv ${conversationId}: ${err?.message ?? err}`,
+      );
+    } finally {
+      this.running.delete(conversationId);
+      // Customer kept typing during the run — re-arm the debounce so the
+      // next reply addresses everything they sent, in one go.
+      if (this.followupNeeded.delete(conversationId)) {
+        this.logger.debug(
+          `Re-arming debounce for conv ${conversationId} (followup needed)`,
+        );
+        this.scheduleAgentRun(conversationId, 'followup');
+      }
+    }
   }
 
   private async processStatus(data: StatusJobData): Promise<any> {
