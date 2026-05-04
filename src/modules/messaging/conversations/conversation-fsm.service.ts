@@ -1,7 +1,8 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
-import { ConversationStatus } from '@prisma/client';
+import { AutomationTrigger, ConversationStatus } from '@prisma/client';
 import { PrismaService } from '../../../database/prisma.service';
 import { RatingsService } from '../../ratings/ratings.service';
+import { OutboxService } from '../../automations/outbox/outbox.service';
 
 type Transition = {
   from: ConversationStatus;
@@ -27,6 +28,7 @@ export class ConversationFsmService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly ratings: RatingsService,
+    private readonly outbox: OutboxService,
   ) {}
 
   canTransition(from: ConversationStatus, to: ConversationStatus): boolean {
@@ -62,20 +64,39 @@ export class ConversationFsmService {
       updateData.reopenedCount = { increment: 1 };
     }
 
-    await this.prisma.conversation.update({
-      where: { id: conversationId },
-      data: updateData,
-    });
+    // Wrap mutation + audit + outbox emit in a single transaction. If
+    // anything fails, none of it is visible — the automation engine never
+    // sees a status change for a conversation whose update was rolled back.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.conversation.update({
+        where: { id: conversationId },
+        data: updateData,
+      });
 
-    await this.prisma.conversationAuditLog.create({
-      data: {
-        conversationId,
-        actorId,
-        action: 'STATUS_CHANGED',
-        fromValue: from,
-        toValue: to,
-        metadata: metadata || {},
-      },
+      await tx.conversationAuditLog.create({
+        data: {
+          conversationId,
+          actorId,
+          action: 'STATUS_CHANGED',
+          fromValue: from,
+          toValue: to,
+          metadata: metadata || {},
+        },
+      });
+
+      await this.outbox.enqueue(
+        tx,
+        AutomationTrigger.CONVERSATION_STATUS_CHANGED,
+        {
+          organizationId: conversation.organizationId,
+          contactId: conversation.contactId,
+          conversationId,
+          channelId: conversation.channelId,
+          actorId,
+          fromStatus: from,
+          toStatus: to,
+        },
+      );
     });
 
     this.logger.log(`Conversation ${conversationId}: ${from} → ${to}`);
@@ -97,40 +118,80 @@ export class ConversationFsmService {
     });
 
     const updates: Record<string, any> = { assignedToId: agentId };
+    const willAlsoChangeStatus =
+      conversation.status === ConversationStatus.PENDING;
 
-    if (conversation.status === ConversationStatus.PENDING) {
+    if (willAlsoChangeStatus) {
       updates.status = ConversationStatus.OPEN;
     }
 
-    if (!conversation.firstResponseAt && conversation.status === ConversationStatus.PENDING) {
+    if (!conversation.firstResponseAt && willAlsoChangeStatus) {
       updates.firstResponseAt = new Date();
     }
 
-    await this.prisma.conversation.update({
-      where: { id: conversationId },
-      data: updates,
-    });
+    // Same-assignee no-op short-circuits the outbox emit. Without this,
+    // every UI re-save would cycle the automation engine.
+    const isNoOp = conversation.assignedToId === agentId;
 
-    await this.prisma.conversationAuditLog.create({
-      data: {
-        conversationId,
-        actorId: actorId || agentId,
-        action: 'ASSIGNED',
-        fromValue: conversation.assignedToId,
-        toValue: agentId,
-      },
-    });
+    await this.prisma.$transaction(async (tx) => {
+      await tx.conversation.update({
+        where: { id: conversationId },
+        data: updates,
+      });
 
-    if (conversation.status === ConversationStatus.PENDING) {
-      await this.prisma.conversationAuditLog.create({
+      await tx.conversationAuditLog.create({
         data: {
           conversationId,
           actorId: actorId || agentId,
-          action: 'STATUS_CHANGED',
-          fromValue: ConversationStatus.PENDING,
-          toValue: ConversationStatus.OPEN,
+          action: 'ASSIGNED',
+          fromValue: conversation.assignedToId,
+          toValue: agentId,
         },
       });
-    }
+
+      if (willAlsoChangeStatus) {
+        await tx.conversationAuditLog.create({
+          data: {
+            conversationId,
+            actorId: actorId || agentId,
+            action: 'STATUS_CHANGED',
+            fromValue: ConversationStatus.PENDING,
+            toValue: ConversationStatus.OPEN,
+          },
+        });
+      }
+
+      if (!isNoOp) {
+        await this.outbox.enqueue(
+          tx,
+          AutomationTrigger.CONVERSATION_ASSIGNED,
+          {
+            organizationId: conversation.organizationId,
+            contactId: conversation.contactId,
+            conversationId,
+            channelId: conversation.channelId,
+            actorId: actorId || agentId,
+            fromAssigneeId: conversation.assignedToId,
+            toAssigneeId: agentId,
+          },
+        );
+      }
+
+      if (willAlsoChangeStatus) {
+        await this.outbox.enqueue(
+          tx,
+          AutomationTrigger.CONVERSATION_STATUS_CHANGED,
+          {
+            organizationId: conversation.organizationId,
+            contactId: conversation.contactId,
+            conversationId,
+            channelId: conversation.channelId,
+            actorId: actorId || agentId,
+            fromStatus: ConversationStatus.PENDING,
+            toStatus: ConversationStatus.OPEN,
+          },
+        );
+      }
+    });
   }
 }

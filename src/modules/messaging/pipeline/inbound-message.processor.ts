@@ -13,12 +13,15 @@ import { WebhookEventsService } from '../../channel-hub/webhook-events.service';
 import { AgentRouterService } from '../../ai-agents/router/agent-router.service';
 import { AiAgentRunnerService } from '../../ai-agents/runner/agent-runner.service';
 import { TranscriptionService } from '../messages/transcription.service';
+import { OutboxService } from '../../automations/outbox/outbox.service';
 import {
+  AutomationTrigger,
   ChannelType,
   MessageDirection,
   MessageContentType as PrismaContentType,
   MessageStatus,
   ConversationStatus,
+  Prisma,
 } from '@prisma/client';
 
 interface InboundJobData {
@@ -79,6 +82,7 @@ export class InboundMessageProcessor extends WorkerHost {
     private readonly agentRouter: AgentRouterService,
     private readonly agentRunner: AiAgentRunnerService,
     private readonly transcription: TranscriptionService,
+    private readonly outbox: OutboxService,
     @InjectQueue('chatbot-processor') private readonly chatbotQueue: Queue,
   ) {
     super();
@@ -164,17 +168,60 @@ export class InboundMessageProcessor extends WorkerHost {
         ? MessageDirection.OUTBOUND
         : MessageDirection.INBOUND;
 
-      const savedMessage = await this.upsertMessage(
-        conversationId,
-        message,
-        direction,
-        isEcho,
+      // Wrap the message persist + outbox emit + lastMessageAt in a single
+      // TX so the automation engine can never observe a message that
+      // doesn't exist in the DB. `isNew` lets us emit only on the FIRST
+      // creation — webhook re-deliveries that hit the (conv,external)
+      // unique find existing rows and skip the emit.
+      const { message: savedMessage, isNew } = await this.prisma.$transaction(
+        async (tx) => {
+          const result = await this.upsertMessage(
+            tx,
+            conversationId,
+            message,
+            direction,
+            isEcho,
+          );
+          await tx.conversation.update({
+            where: { id: conversationId },
+            data: { lastMessageAt: new Date() },
+          });
+          if (
+            result.isNew &&
+            direction === MessageDirection.INBOUND
+          ) {
+            const content = (message.content ?? {}) as Record<string, any>;
+            const body =
+              typeof content.text === 'string'
+                ? content.text
+                : typeof content.caption === 'string'
+                  ? content.caption
+                  : null;
+            const hasAttachment =
+              message.type === 'IMAGE' ||
+              message.type === 'AUDIO' ||
+              message.type === 'VIDEO' ||
+              message.type === 'DOCUMENT' ||
+              message.type === 'STICKER';
+            await this.outbox.enqueue(
+              tx,
+              AutomationTrigger.MESSAGE_RECEIVED,
+              {
+                organizationId,
+                contactId,
+                conversationId,
+                channelId,
+                messageId: result.message.id,
+                body,
+                type: String(message.type),
+                hasAttachment,
+                isFromCustomer: true,
+              },
+            );
+          }
+          return result;
+        },
       );
-
-      await this.prisma.conversation.update({
-        where: { id: conversationId },
-        data: { lastMessageAt: new Date() },
-      });
 
       this.realtimeGateway.emitToChannel(channelId, 'message:new', {
         message: savedMessage,
@@ -280,13 +327,14 @@ export class InboundMessageProcessor extends WorkerHost {
    * We rely on the `(conversationId, externalId)` unique constraint.
    */
   private async upsertMessage(
+    tx: Prisma.TransactionClient,
     conversationId: string,
     message: NormalizedInboundMessage,
     direction: MessageDirection,
     isEcho: boolean,
-  ) {
+  ): Promise<{ message: import('@prisma/client').Message; isNew: boolean }> {
     const existing = message.externalMessageId
-      ? await this.prisma.message.findUnique({
+      ? await tx.message.findUnique({
           where: {
             uq_msg_conv_external: {
               conversationId,
@@ -308,15 +356,18 @@ export class InboundMessageProcessor extends WorkerHost {
       if (!isEcho && existing.status === MessageStatus.QUEUED) {
         patch.status = MessageStatus.DELIVERED;
       }
-      if (Object.keys(patch).length === 0) return existing;
-      return this.prisma.message.update({
+      if (Object.keys(patch).length === 0) {
+        return { message: existing, isNew: false };
+      }
+      const updated = await tx.message.update({
         where: { id: existing.id },
         data: patch,
       });
+      return { message: updated, isNew: false };
     }
 
     try {
-      return await this.prisma.message.create({
+      const created = await tx.message.create({
         data: {
           conversationId,
           direction,
@@ -334,10 +385,11 @@ export class InboundMessageProcessor extends WorkerHost {
           },
         },
       });
+      return { message: created, isNew: true };
     } catch (err: any) {
       if (err?.code === 'P2002') {
-        // Lost a race — re-read and return.
-        const racer = await this.prisma.message.findUnique({
+        // Lost a race — re-read and return as non-new (the racer wrote it).
+        const racer = await tx.message.findUnique({
           where: {
             uq_msg_conv_external: {
               conversationId,
@@ -345,7 +397,7 @@ export class InboundMessageProcessor extends WorkerHost {
             },
           },
         });
-        if (racer) return racer;
+        if (racer) return { message: racer, isNew: false };
       }
       throw err;
     }

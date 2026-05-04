@@ -14,7 +14,7 @@ import { TagsService } from './tags.service';
 import { CreateTagDto } from './dto/create-tag.dto';
 import { UpdateTagDto } from './dto/update-tag.dto';
 import { JwtAuthGuard, OrgGuard, RolesGuard } from '../../common/guards';
-import { CurrentOrg, Roles } from '../../common/decorators';
+import { CurrentOrg, CurrentUser, Roles } from '../../common/decorators';
 
 @ApiTags('Tags')
 @ApiBearerAuth()
@@ -30,8 +30,9 @@ export class TagsController {
     @Param('convId') convId: string,
     @Param('tagId') tagId: string,
     @CurrentOrg('id') orgId: string,
+    @CurrentUser('id') userId: string,
   ) {
-    return this.service.addToConversation(convId, tagId, orgId);
+    return this.service.addToConversation(convId, tagId, orgId, userId);
   }
 
   @Delete('conversation/:convId/tag/:tagId')
@@ -41,8 +42,9 @@ export class TagsController {
     @Param('convId') convId: string,
     @Param('tagId') tagId: string,
     @CurrentOrg('id') orgId: string,
+    @CurrentUser('id') userId: string,
   ) {
-    return this.service.removeFromConversation(convId, tagId, orgId);
+    return this.service.removeFromConversation(convId, tagId, orgId, userId);
   }
 
   @Post('contact/:contactId/tag/:tagId')
@@ -52,8 +54,9 @@ export class TagsController {
     @Param('contactId') contactId: string,
     @Param('tagId') tagId: string,
     @CurrentOrg('id') orgId: string,
+    @CurrentUser('id') userId: string,
   ) {
-    return this.service.addToContact(contactId, tagId, orgId);
+    return this.service.addToContact(contactId, tagId, orgId, userId);
   }
 
   @Delete('contact/:contactId/tag/:tagId')
@@ -63,8 +66,9 @@ export class TagsController {
     @Param('contactId') contactId: string,
     @Param('tagId') tagId: string,
     @CurrentOrg('id') orgId: string,
+    @CurrentUser('id') userId: string,
   ) {
-    return this.service.removeFromContact(contactId, tagId, orgId);
+    return this.service.removeFromContact(contactId, tagId, orgId, userId);
   }
 
   @Post()

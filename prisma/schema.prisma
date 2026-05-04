@@ -1258,3 +1258,178 @@ model Product {
   @@index([organizationId, isActive, order])
   @@map("products")
 }
+
+// ═══════════════════════════════════════════════════
+// AUTOMATIONS — internal rule engine (WHEN → THEN)
+// ═══════════════════════════════════════════════════
+//
+// Architecture (read this before touching anything):
+//
+// 1. Domain services (TagsService, MessagesService, ConversationFsmService)
+//    write `OutboxEvent` rows in the SAME transaction as the domain mutation.
+//    This is the outbox pattern: if the TX rolls back, the event is gone too,
+//    so we never publish events for state that doesn't exist.
+//
+// 2. `OutboxPoller` (cron, 1s) reads `status=PENDING` rows, marks them
+//    PROCESSING with a worker lease, and pushes to the BullMQ queue
+//    `automation-events` with a `dedupKey` so re-deliveries collapse.
+//
+// 3. `AutomationEventProcessor` (BullMQ worker) acquires a Redis lock on
+//    `contact:<id>` to serialize executions on the same lead, finds matching
+//    `Automation` rows for (orgId, trigger, conditions match), and runs each
+//    in sequence respecting `cascadeDepth <= 4` and the trace-level loop
+//    detector (a Set of (automationId, contactId) already visited in the
+//    current event chain).
+//
+// 4. Each run produces one `AutomationRun` row with structured logs of
+//    every action attempted, even when skipped. This is the audit trail
+//    surfaced on the UI.
+//
+// Kill switch: env `AUTOMATIONS_ENABLED=false` makes the worker drop every
+// job without executing. Set this BEFORE any incident response.
+
+enum AutomationTrigger {
+  TAG_ADDED
+  TAG_REMOVED
+  MESSAGE_RECEIVED
+  CONVERSATION_STATUS_CHANGED
+  CONVERSATION_ASSIGNED
+}
+
+enum AutomationRunStatus {
+  SUCCESS // todas as actions executaram
+  PARTIAL // uma ou mais actions falharam mas o run continuou (continueOnError)
+  FAILED // run abortado (action critica falhou ou erro de infra)
+  SKIPPED // condições não casaram, ou rate limit, ou kill switch
+}
+
+enum OutboxEventStatus {
+  PENDING // aguardando poller
+  PROCESSING // poller pegou, em fila do worker
+  PROCESSED // worker confirmou
+  FAILED // worker falhou após retries
+  DLQ // jogado pro dead letter queue
+}
+
+// Append-only log de eventos de domínio. Escrito na MESMA transação que a
+// mutação que originou o evento, garantindo "exactly published once or
+// never". O poller é o único que muta `status`/`processedAt`. Nunca delete
+// linhas aqui sem garantia de retenção (90d default).
+model OutboxEvent {
+  id             String            @id @default(cuid())
+  organizationId String            @map("organization_id")
+  trigger        AutomationTrigger
+  payload        Json // { contactId?, conversationId?, channelId?, tagId?, fromStatus?, toStatus?, ... }
+  // dedupKey: idempotência. Webhooks reentregues geram outbox events com
+  // mesma dedupKey → @@unique evita duplicação. Format livre por trigger,
+  // mas tipicamente "<trigger>:<entityId>:<contextId>".
+  dedupKey       String?           @unique @map("dedup_key")
+  // traceId: identifica uma cadeia causal de eventos. Quando uma action de
+  // automation produz outro evento (cascade), o traceId é propagado. Loop
+  // detection vive aqui.
+  traceId        String            @map("trace_id")
+  // cascadeDepth: 0 = evento original (de UI/webhook). N = N actions de
+  // automation atrás. Worker recusa execução quando depth > 4.
+  cascadeDepth   Int               @default(0) @map("cascade_depth")
+  // Snapshot opcional de quem causou (user que clicou ou system).
+  actorId        String?           @map("actor_id")
+  status         OutboxEventStatus @default(PENDING)
+  attemptCount   Int               @default(0) @map("attempt_count")
+  lastError      String?           @map("last_error") @db.Text
+  // Lease pro poller (worker que pegou + quando expira). Evita dois pollers
+  // pegarem o mesmo evento. Reset quando expira.
+  leasedBy       String?           @map("leased_by")
+  leasedUntil    DateTime?         @map("leased_until")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  processedAt    DateTime?         @map("processed_at")
+
+  @@index([status, createdAt], name: "idx_outbox_status_time")
+  @@index([organizationId, trigger, createdAt(sort: Desc)], name: "idx_outbox_org_trigger")
+  @@index([traceId], name: "idx_outbox_trace")
+  @@map("outbox_events")
+}
+
+model Automation {
+  id             String            @id @default(cuid())
+  organizationId String            @map("organization_id")
+  name           String
+  description    String?
+  trigger        AutomationTrigger
+  // conditions: 2-level group structure validated at save time.
+  //   { match: "OR", groups: [
+  //       { match: "AND", rules: [{ field, op, value }, ...] },
+  //       ...
+  //   ]}
+  // Empty conditions = always match (regra dispara em todo evento do trigger).
+  conditions     Json              @default("{}")
+  // actions: ordered array of { type, params, continueOnError }.
+  actions        Json              @default("[]")
+
+  // schemaVersion: bumped when conditions/actions JSON shape changes.
+  // Workers refuse to run automations with unknown schemaVersion.
+  schemaVersion  Int               @default(1) @map("schema_version")
+
+  // Estado operacional
+  enabled        Boolean           @default(false)
+  // actorId: snapshot do criador. Se este user perder permissão / sair do
+  // workspace, o run é bloqueado e a automation pausada.
+  actorId        String            @map("actor_id")
+  priority       Int               @default(0)
+
+  // Auto-disable em falhas consecutivas
+  consecutiveFailures Int     @default(0) @map("consecutive_failures")
+  autoPausedAt        DateTime? @map("auto_paused_at")
+  autoPausedReason    String?   @map("auto_paused_reason")
+
+  // Rate limit por (automation, conversation): max execuções em 60s
+  rateLimitPerMinute Int @default(10) @map("rate_limit_per_minute")
+
+  // Telemetria
+  lastRunAt   DateTime? @map("last_run_at")
+  runCount    Int       @default(0) @map("run_count")
+  successCount Int      @default(0) @map("success_count")
+  failureCount Int      @default(0) @map("failure_count")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  runs AutomationRun[]
+
+  @@index([organizationId, enabled, trigger], name: "idx_automation_org_enabled")
+  @@index([organizationId, deletedAt], name: "idx_automation_org_deleted")
+  @@map("automations")
+}
+
+model AutomationRun {
+  id             String              @id @default(cuid())
+  automationId   String              @map("automation_id")
+  organizationId String              @map("organization_id")
+  // outboxEventId: liga o run ao evento que disparou (debug + tracing)
+  outboxEventId  String              @map("outbox_event_id")
+  traceId        String              @map("trace_id")
+
+  status         AutomationRunStatus
+  // errorCode: enum-ish curto pra UI agrupar. Ex:
+  //   condition_not_matched | rate_limited | invalid_ref | external_api_error
+  //   timeout | actor_unauthorized | kill_switch | cascade_max_depth | loop_detected
+  errorCode      String?             @map("error_code")
+  errorMessage   String?             @map("error_message") @db.Text
+
+  // Snapshot do payload do evento (debug)
+  triggerPayload Json                @map("trigger_payload")
+  // actionsLog: array de { index, type, status, durationMs, error?, output? }
+  actionsLog     Json                @default("[]") @map("actions_log")
+
+  durationMs     Int?                @map("duration_ms")
+  startedAt      DateTime            @default(now()) @map("started_at")
+  finishedAt     DateTime?           @map("finished_at")
+
+  automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  @@index([automationId, startedAt(sort: Desc)], name: "idx_run_automation_time")
+  @@index([organizationId, startedAt(sort: Desc)], name: "idx_run_org_time")
+  @@index([traceId], name: "idx_run_trace")
+  @@index([status, startedAt(sort: Desc)], name: "idx_run_status_time")
+  @@map("automation_runs")
+}
