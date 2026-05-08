@@ -147,6 +147,14 @@ model Organization {
   /// pra qualquer fluxo (vendas/suporte/CS): regras de entrega, horários
   /// de live, política de reembolso, talking points atuais, etc.
   aiBusinessNotes      String? @map("ai_business_notes") @db.Text
+  /// Regras de segurança (imutáveis) injetadas na Layer 1 do prompt composer.
+  /// Shape: { noPriceCommitment, noDeadlineCommitment, noResultPromise,
+  /// noCrossClientDataLeak, forbiddenEmojis: string[], language: 'pt-BR'|'en-US',
+  /// customRules: string[] }. NULL = usa defaults do código.
+  aiSecurityRules      Json?   @map("ai_security_rules")
+  /// Threshold de confiança do IntentClassifier pra pular o orchestrator.
+  /// Default 0.85. Abaixo disso cai no Augusto.
+  aiClassifierThreshold Decimal? @default(0.85) @map("ai_classifier_threshold") @db.Decimal(3, 2)
 
   members       UserOrganization[]
   channels      Channel[]
@@ -426,8 +434,9 @@ model Conversation {
   internalNotes InternalNote[]
   auditLogs     ConversationAuditLog[]
   rating        ConversationRating?
-  aiRuns        AiAgentRun[]
-  aiHandoffs    AiAgentHandoff[]
+  aiRuns           AiAgentRun[]
+  aiHandoffs       AiAgentHandoff[]
+  aiPendingActions AiPendingAction[]
   reads         ConversationRead[]
   cards         Card[]                 @relation("CardConversation")
 
@@ -823,10 +832,11 @@ model AiAgent {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   channels     AiAgentChannel[]
-  memories     AiAgentMemory[]
-  runs         AiAgentRun[]
-  handoffsFrom AiAgentHandoff[] @relation("HandoffFrom")
-  handoffsTo   AiAgentHandoff[] @relation("HandoffTo")
+  memories       AiAgentMemory[]
+  runs           AiAgentRun[]
+  handoffsFrom   AiAgentHandoff[]  @relation("HandoffFrom")
+  handoffsTo     AiAgentHandoff[]  @relation("HandoffTo")
+  pendingActions AiPendingAction[]
   activeOn     Conversation[]   @relation("ActiveAgent")
   skills       AiAgentSkill[]
 
@@ -1035,12 +1045,19 @@ model AiAgentRun {
   costUsd          Decimal @default(0) @map("cost_usd") @db.Decimal(10, 6)
   durationMs       Int?    @map("duration_ms")
 
+  /// Intent classificado pelo IntentClassifier (Haiku). NULL = não passou pelo classifier.
+  classifiedIntent     String?  @map("classified_intent")
+  classifierConfidence Decimal? @map("classifier_confidence") @db.Decimal(4, 3)
+  /// True se o classifier teve confidence alta o bastante pra pular o orchestrator (Augusto).
+  skippedOrchestrator  Boolean  @default(false) @map("skipped_orchestrator")
+
   startedAt  DateTime  @default(now()) @map("started_at")
   finishedAt DateTime? @map("finished_at")
 
-  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  agent        AiAgent      @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  toolCalls    AiToolCall[]
+  conversation    Conversation       @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  agent           AiAgent            @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  toolCalls       AiToolCall[]
+  pendingActions  AiPendingAction[]
 
   @@index([organizationId, startedAt], name: "idx_ai_run_org_time")
   @@index([conversationId], name: "idx_ai_run_conv")
@@ -1079,6 +1096,59 @@ model AiAgentHandoff {
 
   @@index([conversationId], name: "idx_ai_handoff_conv")
   @@map("ai_agent_handoffs")
+}
+
+// ─── Pending actions (confirmação de ações destrutivas) ──────────
+//
+// Tools destrutivas (grantAccess, resetPassword, transferToHuman) NÃO executam
+// direto — criam um PendingAction que precisa ser aprovado por um operador
+// humano antes da execução real. Substitui o storage Redis interim que o
+// agent-6 criou em `confirmations/pending-action.storage.ts`.
+enum AiPendingActionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+  EXECUTED
+}
+
+enum AiPendingActionImpact {
+  low
+  medium
+  high
+  critical
+}
+
+model AiPendingAction {
+  id             String                @id @default(cuid())
+  agentRunId     String                @map("agent_run_id")
+  conversationId String                @map("conversation_id")
+  agentId        String                @map("agent_id")
+  toolName       String                @map("tool_name")
+  args           Json
+  /// preview = { action, impact, rollback?, affectedEntity? }
+  preview        Json
+  status         AiPendingActionStatus @default(PENDING)
+  expiresAt      DateTime              @map("expires_at")
+
+  approvedBy      String?   @map("approved_by")
+  approvedAt      DateTime? @map("approved_at")
+  rejectedBy      String?   @map("rejected_by")
+  rejectedAt      DateTime? @map("rejected_at")
+  rejectedReason  String?   @map("rejected_reason")
+  executionResult Json?     @map("execution_result")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  run          AiAgentRun   @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  agent        AiAgent      @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, status], name: "idx_ai_pending_conv_status")
+  @@index([status, expiresAt], name: "idx_ai_pending_status_exp")
+  @@index([agentRunId], name: "idx_ai_pending_run")
+  @@map("ai_pending_actions")
 }
 
 // ─── Inbox views (saved filtered inboxes per user) ──────────

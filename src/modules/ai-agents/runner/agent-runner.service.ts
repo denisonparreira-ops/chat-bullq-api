@@ -8,6 +8,8 @@ import {
   AiTool,
   NotificationType,
 } from '@prisma/client';
+import { InjectQueue } from '@nestjs/bullmq';
+import type { Queue } from 'bullmq';
 import { PrismaService } from '../../../database/prisma.service';
 import { LlmService } from '../llm/llm.service';
 import { LlmMessage, LlmToolCall, LlmToolDefinition } from '../llm/llm.types';
@@ -19,6 +21,10 @@ import { PromptBuilderService } from './prompt-builder.service';
 import { CatalogSyncService } from './catalog-sync.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { isToolCallFailure } from '../agents/agents.service';
+import {
+  AgentRouterService,
+  type AgentSelection,
+} from '../router/agent-router.service';
 
 const MAX_TOOL_ITERATIONS = 8;
 const MAX_RECENT_MESSAGES = 30;
@@ -63,6 +69,11 @@ export class AiAgentRunnerService {
     private readonly sqlExecutor: SqlToolExecutorService,
     private readonly catalogSync: CatalogSyncService,
     private readonly notifications: NotificationsService,
+    private readonly agentRouter: AgentRouterService,
+    @InjectQueue('memory-extractor')
+    private readonly memoryExtractorQueue: Queue,
+    @InjectQueue('rag-indexer')
+    private readonly ragIndexerQueue: Queue,
   ) {}
 
   async run({
@@ -70,7 +81,24 @@ export class AiAgentRunnerService {
     triggerMessage,
     chainDepth = 0,
   }: RunInput): Promise<void> {
-    const agent = await this.resolveAgent(conversation);
+    // Fase 2: usa o agentRouter (com IntentClassifier) pra escolher o agent.
+    // Auto-chains (chainDepth > 0) NÃO classificam de novo — já tem activeAgentId.
+    let selection: AgentSelection | null = null;
+    if (chainDepth === 0) {
+      const triggerText = this.extractText(
+        (triggerMessage.content as unknown) ?? '',
+      );
+      selection = await this.agentRouter.selectAgent(
+        conversation,
+        triggerText,
+        [],
+      );
+    }
+    const agent = selection
+      ? await this.prisma.aiAgent.findFirst({
+          where: { id: selection.agentId, isActive: true, deletedAt: null },
+        })
+      : await this.resolveAgent(conversation);
     if (!agent) {
       this.logger.debug(
         `No agent resolved for conv ${conversation.id} — skipping run`,
@@ -116,6 +144,9 @@ export class AiAgentRunnerService {
         triggerMessageId: triggerMessage.id,
         modelId: agent.modelId,
         status: AiRunStatus.RUNNING,
+        classifiedIntent: selection?.classifiedIntent ?? null,
+        classifierConfidence: selection?.classifierConfidence ?? null,
+        skippedOrchestrator: selection?.skippedOrchestrator ?? false,
       },
     });
 
@@ -335,6 +366,20 @@ export class AiAgentRunnerService {
           costUsd: aggregateUsage.costUsd,
         },
       });
+
+      // Fase 2: enfileirar jobs assíncronos de memória + RAG
+      // (fire-and-forget — falha não pode quebrar o run)
+      this.scheduleAfterRunJobs(
+        agent.id,
+        conversation.id,
+        conversation.contactId,
+        triggerMessage,
+        finalAction,
+      ).catch((err) =>
+        this.logger.warn(
+          `Failed to schedule after-run jobs for run ${run.id}: ${err?.message ?? err}`,
+        ),
+      );
 
       // Auto-chain: if this run delegated to a worker, immediately fire the
       // worker run so the customer gets the new agent's first message right
@@ -722,6 +767,62 @@ export class AiAgentRunnerService {
    * Extract plain text from an LlmMessage content. Handles both string
    * content and content blocks (the cache_control format).
    */
+  /**
+   * Fase 2: enfileira jobs assíncronos pós-run.
+   *  - memory-extractor: Haiku extrai facts/summary atualizado e grava em AiAgentMemory
+   *  - rag-indexer: gera embedding da mensagem do cliente e indexa em ai_vector_entries
+   *
+   * Ambos são fire-and-forget — falha aqui não pode interromper o agent run.
+   */
+  private async scheduleAfterRunJobs(
+    agentId: string,
+    conversationId: string,
+    contactId: string,
+    triggerMessage: Message,
+    finalAction: AiFinalAction,
+  ): Promise<void> {
+    // Só extrai memória quando o agent realmente respondeu / agiu —
+    // runs que falharam ou foram ignorados não têm sinal útil pra extrair.
+    const shouldExtract =
+      finalAction === AiFinalAction.REPLIED ||
+      finalAction === AiFinalAction.DELEGATED ||
+      finalAction === AiFinalAction.TRANSFERRED_TO_HUMAN;
+    if (shouldExtract) {
+      try {
+        await this.memoryExtractorQueue.add(
+          'extract_memory',
+          { agentId, contactId, conversationId },
+          { removeOnComplete: 100, removeOnFail: 50 },
+        );
+      } catch (err: any) {
+        this.logger.warn(
+          `memory-extractor enqueue failed: ${err?.message ?? err}`,
+        );
+      }
+    }
+
+    // RAG: indexa mensagem do cliente (não as do agent — economiza)
+    const messageText = this.extractText(triggerMessage.content as unknown);
+    if (messageText && messageText.length >= 10) {
+      try {
+        await this.ragIndexerQueue.add(
+          'index_message',
+          {
+            type: 'index_message',
+            messageId: triggerMessage.id,
+            content: messageText,
+            scope: { conversationId, agentId, contactId },
+          },
+          { removeOnComplete: 200, removeOnFail: 50 },
+        );
+      } catch (err: any) {
+        this.logger.warn(
+          `rag-indexer enqueue failed: ${err?.message ?? err}`,
+        );
+      }
+    }
+  }
+
   private extractText(content: unknown): string {
     if (typeof content === 'string') return content.trim();
     if (Array.isArray(content)) {
