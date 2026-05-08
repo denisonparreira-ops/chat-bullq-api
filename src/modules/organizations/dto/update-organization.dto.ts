@@ -1,4 +1,5 @@
 import {
+  IsArray,
   IsBoolean,
   IsInt,
   IsObject,
@@ -79,6 +80,18 @@ export class UpdateOrganizationDto {
   @IsString()
   @MaxLength(4000)
   aiBusinessNotes?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      'Lista de domínios permitidos em URLs que a IA pode mandar (ex: ["bravy.co", "trivapp.com.br"]). Quando preenchida, runtime guard bloqueia qualquer link com host fora da lista — IA é forçada a reescrever sem link inventado. Vazia/null = permissivo (só warning). Match é por sufixo: "bravy.co" autoriza "members.bravy.co".',
+    nullable: true,
+    type: [String],
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsArray()
+  @IsString({ each: true })
+  allowedUrlDomains?: string[] | null;
 
   // ─── Watchdog settings ──────────────────────────────────────────
 

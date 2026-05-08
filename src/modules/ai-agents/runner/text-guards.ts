@@ -79,3 +79,56 @@ export function containsMetaTalk(text: string): boolean {
   if (!text) return false;
   return META_TALK_PATTERNS.some((re) => re.test(text));
 }
+
+/**
+ * Extrai todos os hostnames (sem `www.`) de URLs http(s) num texto.
+ * Tolera lixo no fim — `://bravy.co.` ou `bravy.co!` viram `bravy.co`.
+ */
+export function extractHostnames(text: string): string[] {
+  if (!text) return [];
+  const urls = text.match(/https?:\/\/[^\s<>"')\]]+/gi);
+  if (!urls) return [];
+  const hosts: string[] = [];
+  for (const raw of urls) {
+    try {
+      const host = new URL(raw.replace(/[.,;:!?)\]]+$/, '')).hostname.toLowerCase();
+      hosts.push(host.replace(/^www\./, ''));
+    } catch {
+      // ignora URLs malformadas
+    }
+  }
+  return hosts;
+}
+
+/**
+ * Verifica se o `text` contém URLs cujo host (ou parent domain) está fora
+ * da `whitelist`. Compara por sufixo — `members.bravy.co` bate com `bravy.co`.
+ *
+ * Returns:
+ *  - hosts proibidos encontrados (array vazio = ok)
+ *
+ * Casos especiais:
+ *  - whitelist null/undefined → retorna [] (modo permissivo)
+ *  - whitelist vazio []       → retorna [] (modo permissivo, igual null)
+ *  - texto sem URL            → retorna []
+ */
+export function findForbiddenUrlHosts(
+  text: string,
+  whitelist: string[] | null | undefined,
+): string[] {
+  if (!whitelist || whitelist.length === 0) return [];
+  const allowed = whitelist
+    .map((d) => d.toLowerCase().replace(/^www\./, '').replace(/^\./, ''))
+    .filter(Boolean);
+  if (allowed.length === 0) return [];
+
+  const hosts = extractHostnames(text);
+  const bad: string[] = [];
+  for (const host of hosts) {
+    const ok = allowed.some(
+      (allow) => host === allow || host.endsWith(`.${allow}`),
+    );
+    if (!ok) bad.push(host);
+  }
+  return bad;
+}

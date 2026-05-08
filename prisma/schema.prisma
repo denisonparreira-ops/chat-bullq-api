@@ -157,6 +157,13 @@ model Organization {
   /// Default 0.85. Abaixo disso cai no Augusto.
   aiClassifierThreshold Decimal? @default(0.85) @map("ai_classifier_threshold") @db.Decimal(3, 2)
 
+  /// Lista de domínios permitidos em links que a IA pode mandar pro
+  /// cliente. Quando preenchido (array com strings tipo "bravy.co",
+  /// "trivapp.com.br"), o runtime guard rejeita qualquer URL fora da
+  /// lista — IA tem que reescrever sem o link inventado. NULL ou
+  /// array vazio = permissivo (só loga warning, não bloqueia).
+  allowedUrlDomains    Json?   @map("allowed_url_domains")
+
   // ─── Watchdog (conversas presas) ────────────────
   /// Liga/desliga o watchdog que detecta conversas onde a IA travou ou
   /// o humano abandonou. Default: true.
