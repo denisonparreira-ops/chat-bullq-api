@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { AiSkill, AiTool } from '@prisma/client';
+import { PrismaService } from '../../../database/prisma.service';
 import { ToolContext, ToolResult } from './tool.types';
 import { PendingActionService } from '../confirmations/pending-action.service';
 import type {
@@ -9,17 +10,20 @@ import type {
 } from '../confirmations/confirmation.types';
 
 /**
- * Skills HTTP que NÃO podem rodar direto — viram PendingAction e só
- * executam após aprovação humana. Mapeia nome da skill → impacto.
- *
- * Match é case-sensitive e bate com o `name` que o LLM vê (mesmo nome
- * persistido em ai_skills).
+ * Tabela de impacto por skill. Quando o operador marca `requiresApproval=true`
+ * em `ai_agent_skills`, a skill cria um PendingAction com este impacto.
+ * Skills não listadas defaultam pra `medium`. Não tem efeito nenhum se a
+ * skill não exigir aprovação — é só pra preencher o `preview.impact`.
  */
-const DESTRUCTIVE_HTTP_SKILLS: Record<string, ImpactLevel> = {
+const SKILL_IMPACT: Record<string, ImpactLevel> = {
   grantAccess: 'high',
   resetPassword: 'high',
   sendLoginLink: 'medium',
 };
+
+function impactFor(skillName: string): ImpactLevel {
+  return SKILL_IMPACT[skillName] ?? 'medium';
+}
 
 /**
  * Executes HTTP-backed Skills. The connection (base url + auth headers)
@@ -38,6 +42,7 @@ export class HttpToolExecutorService {
   constructor(
     private readonly config: ConfigService,
     private readonly pendingActions: PendingActionService,
+    private readonly prisma: PrismaService,
   ) {}
 
   async execute(
@@ -64,13 +69,19 @@ export class HttpToolExecutorService {
       };
     }
 
-    // Skills destrutivas exigem aprovação humana — short-circuit antes
-    // de bater na rota real. `bypassPendingGate` é usado pelo executor
-    // pós-aprovação (Fase 2.5) pra rodar a skill DEPOIS que o operador
-    // aprovou — caso contrário entraríamos em loop de PendingActions.
-    const impact = DESTRUCTIVE_HTTP_SKILLS[skill.name];
-    if (impact && !options.bypassPendingGate) {
-      return this.gateAsPendingAction(skill, input, ctx, impact);
+    // Gating configurável por (agent, skill): operador marca
+    // `ai_agent_skills.requires_approval = true` na UI quando quer que a
+    // skill seja gateada antes de executar pra esse agent específico.
+    // `bypassPendingGate` é usado pelo executor pós-aprovação pra rodar
+    // a skill DEPOIS que o operador aprovou (evita loop de PendingActions).
+    if (!options.bypassPendingGate) {
+      const link = await this.prisma.aiAgentSkill.findUnique({
+        where: { agentId_skillId: { agentId: ctx.agentId, skillId: skill.id } },
+        select: { requiresApproval: true },
+      });
+      if (link?.requiresApproval) {
+        return this.gateAsPendingAction(skill, input, ctx, impactFor(skill.name));
+      }
     }
 
     const url =

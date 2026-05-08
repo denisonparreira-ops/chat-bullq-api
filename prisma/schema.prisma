@@ -113,6 +113,7 @@ model User {
   organizations         UserOrganization[]
   assignedConversations Conversation[]     @relation("AssignedAgent")
   sentMessages          Message[]          @relation("MessageSender")
+  revokedMessages       Message[]          @relation("MessageRevoker")
   notifications         Notification[]
   pushSubscriptions     PushSubscription[]
   sentInvitations       Invitation[]
@@ -542,6 +543,20 @@ model Message {
   failedReason   String?            @map("failed_reason")
   metadata       Json               @default("{}")
   createdAt      DateTime           @default(now()) @map("created_at")
+
+  // ─── Revoke state (delete for everyone) ─────────
+  /// Quando setado, a mensagem foi marcada como deletada. UI renderiza
+  /// placeholder em vez do conteúdo. Não removemos a row pra preservar
+  /// auditoria + histórico (audit-log mantém o conteúdo original).
+  revokedAt              DateTime? @map("revoked_at")
+  revokedBy              String?   @map("revoked_by")
+  /// Se conseguimos propagar o delete pro provider (Zappfy/Meta).
+  /// - true  = chamada na API do provider funcionou (some no app do cliente)
+  /// - false = provider não suportou ou erro (mensagem ficou no app do cliente,
+  ///           só sumiu no nosso inbox)
+  /// - null  = ainda não foi revogada
+  revokeSucceededRemote  Boolean?  @map("revoke_succeeded_remote")
+  revoker                User?     @relation("MessageRevoker", fields: [revokedBy], references: [id], onDelete: SetNull)
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender       User?        @relation("MessageSender", fields: [senderId], references: [id], onDelete: SetNull)
@@ -1007,6 +1022,12 @@ model AiSkillVersion {
 model AiAgentSkill {
   agentId String @map("agent_id")
   skillId String @map("skill_id")
+
+  /// Se true, esta skill quando chamada por este agent NÃO executa direto:
+  /// cria um AiPendingAction e aguarda aprovação humana via inbox.
+  /// Default false — agent decide autonomamente se chama ou não.
+  /// Configurável por (agent, skill) na UI Jarvis → Agentes → Skills.
+  requiresApproval Boolean @default(false) @map("requires_approval")
 
   agent AiAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
   skill AiSkill @relation(fields: [skillId], references: [id], onDelete: Cascade)

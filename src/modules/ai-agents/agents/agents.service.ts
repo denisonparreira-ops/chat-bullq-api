@@ -571,6 +571,69 @@ export class AgentsService {
     });
     return (agg._sum.inputTokens ?? 0) + (agg._sum.outputTokens ?? 0);
   }
+
+  // ─── Skills do agent + gating de aprovação ───────────────────────
+
+  /**
+   * Lista as skills atribuídas a um agent + flag `requiresApproval` da
+   * junction. UI usa pra renderizar a lista com toggle.
+   */
+  async listSkills(organizationId: string, agentId: string) {
+    await this.assertOwnership(organizationId, agentId);
+    const rows = await this.prisma.aiAgentSkill.findMany({
+      where: { agentId },
+      include: {
+        skill: {
+          select: {
+            id: true,
+            name: true,
+            description: true,
+            source: true,
+            category: true,
+            isActive: true,
+          },
+        },
+      },
+      orderBy: { skill: { name: 'asc' } },
+    });
+    return rows.map((r) => ({
+      skillId: r.skillId,
+      requiresApproval: r.requiresApproval,
+      skill: r.skill,
+    }));
+  }
+
+  /**
+   * Liga/desliga o gating de aprovação humana pra essa skill nesse agent.
+   */
+  async setSkillApproval(
+    organizationId: string,
+    agentId: string,
+    skillId: string,
+    requiresApproval: boolean,
+  ) {
+    await this.assertOwnership(organizationId, agentId);
+    const existing = await this.prisma.aiAgentSkill.findUnique({
+      where: { agentId_skillId: { agentId, skillId } },
+    });
+    if (!existing) {
+      throw new NotFoundException(
+        `Skill ${skillId} não está atribuída ao agent ${agentId}`,
+      );
+    }
+    return this.prisma.aiAgentSkill.update({
+      where: { agentId_skillId: { agentId, skillId } },
+      data: { requiresApproval },
+    });
+  }
+
+  private async assertOwnership(organizationId: string, agentId: string) {
+    const agent = await this.prisma.aiAgent.findFirst({
+      where: { id: agentId, organizationId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!agent) throw new NotFoundException(`Agent ${agentId} não encontrado`);
+  }
 }
 
 // ─── pure helpers (top-level) ─────────────────────────────────────

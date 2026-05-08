@@ -88,6 +88,37 @@ export class AgentsController {
     return this.service.unassignChannel(orgId, id, channelId);
   }
 
+  @Get(':id/skills')
+  @ApiOperation({
+    summary: 'List skills attached to this agent (with requiresApproval flag)',
+  })
+  listSkills(
+    @CurrentOrg('id') orgId: string,
+    @Param('id') id: string,
+  ) {
+    return this.service.listSkills(orgId, id);
+  }
+
+  @Patch(':id/skills/:skillId/approval')
+  @Roles(OrgRole.OWNER, OrgRole.ADMIN)
+  @ApiOperation({
+    summary:
+      'Toggle requiresApproval pra essa skill nesse agent. Body: { requiresApproval: boolean }',
+  })
+  setSkillApproval(
+    @CurrentOrg('id') orgId: string,
+    @Param('id') id: string,
+    @Param('skillId') skillId: string,
+    @Body() body: { requiresApproval: boolean },
+  ) {
+    return this.service.setSkillApproval(
+      orgId,
+      id,
+      skillId,
+      Boolean(body?.requiresApproval),
+    );
+  }
+
   @Get(':id/runs')
   @ApiOperation({ summary: 'List recent runs of this agent (with tool calls)' })
   runs(
