@@ -50,16 +50,22 @@ export class LlmService {
       ? this.toAnthropicTools(this.sanitizeTools(req.tools))
       : undefined;
 
+    // Opus 4.7 removeu sampling parameters — passa temperature/top_p/top_k
+    // e a API retorna 400. Omitir quando o modelo for Opus 4.7+.
+    const supportsTemperature = !this.isOpus47(modelId);
+
     let response: Anthropic.Message;
     try {
       response = await this.client.messages.create({
         model: modelId,
         max_tokens: req.maxTokens ?? 2048,
-        temperature: req.temperature ?? 0.7,
+        ...(supportsTemperature
+          ? { temperature: req.temperature ?? 0.7 }
+          : {}),
         ...(system ? { system } : {}),
         messages,
         ...(tools && tools.length > 0 ? { tools } : {}),
-        ...(this.sanitizeModelParams(req.modelParams) as object),
+        ...(this.sanitizeModelParams(req.modelParams, modelId) as object),
       });
     } catch (err: unknown) {
       this.handleAnthropicError(err, modelId, tools, messages, system);
@@ -263,16 +269,27 @@ export class LlmService {
   }
 
   /**
+   * Opus 4.7+ removeu sampling parameters (temperature, top_p, top_k) —
+   * mandar qualquer um retorna 400 `<param> is deprecated for this model`.
+   * Outros modelos (Sonnet, Haiku) continuam aceitando normalmente.
+   */
+  private isOpus47(modelId: string): boolean {
+    return /^claude-opus-4-(7|8|9|\d{2,})/.test(modelId);
+  }
+
+  /**
    * Passa adiante apenas os params que a Anthropic API aceita —
-   * evita 400 por campo desconhecido em call sites genéricos.
+   * evita 400 por campo desconhecido em call sites genéricos. Em Opus 4.7
+   * também filtra os sampling parameters (que foram removidos do modelo).
    */
   private sanitizeModelParams(
     params: Record<string, unknown> | undefined,
+    modelId: string,
   ): Record<string, unknown> {
     if (!params) return {};
+    const samplingBanned = this.isOpus47(modelId);
     const allowed = new Set([
-      'top_p',
-      'top_k',
+      ...(samplingBanned ? [] : ['top_p', 'top_k']),
       'stop_sequences',
       'metadata',
       'service_tier',
