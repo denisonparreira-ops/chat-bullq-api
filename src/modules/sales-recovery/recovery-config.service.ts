@@ -85,6 +85,28 @@ export class RecoveryConfigService {
     );
   }
 
+  /**
+   * Nome do template HSM aprovado na Meta pro opener (obrigatório quando o
+   * canal de outreach é WhatsApp Oficial — texto livre é bloqueado fora da
+   * janela de 24h). Null → no oficial o envio é pulado (card fica em
+   * Oportunidade). No Zappfy não é usado (manda texto direto).
+   */
+  get openerTemplateName(): string | null {
+    return this.config.get<string>('RECOVERY_OPENER_TEMPLATE_NAME') ?? null;
+  }
+
+  get followUpTemplateName(): string | null {
+    return (
+      this.config.get<string>('RECOVERY_FOLLOWUP_TEMPLATE_NAME') ??
+      this.openerTemplateName
+    );
+  }
+
+  /** Idioma do template HSM (ex: pt_BR). */
+  get templateLang(): string {
+    return this.config.get<string>('RECOVERY_TEMPLATE_LANG') ?? 'pt_BR';
+  }
+
   /** Cron do watchdog de cards parados. Default: a cada 30min. */
   get watchdogPattern(): string {
     return (

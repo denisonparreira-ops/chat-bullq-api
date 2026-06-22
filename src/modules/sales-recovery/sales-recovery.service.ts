@@ -95,9 +95,11 @@ export class SalesRecoveryService {
     });
 
     // Cold outreach: dispara a 1ª mensagem e move pra "Tentativa de Contato".
+    // Se o envio for pulado (ex.: canal oficial sem template HSM aprovado), o
+    // card fica em Oportunidade — a IA ainda assume se o lead responder.
     if (contactId && externalId) {
       try {
-        const { conversationId } = await this.outreach.sendOpener({
+        const { conversationId, sent } = await this.outreach.sendOpener({
           organizationId,
           channelId,
           contactId,
@@ -109,16 +111,22 @@ export class SalesRecoveryService {
             link: k.checkoutUrl ?? '',
           },
         });
+        // Vincula a conversa ao card mesmo se a mensagem não saiu.
         await this.prisma.card.update({
           where: { id: created.id },
           data: {
             conversationId,
-            metadata: this.buildMetadata(k, {
-              outreach: { attempts: 1, lastSentAt: new Date().toISOString() },
-            }) as Prisma.InputJsonValue,
+            metadata: this.buildMetadata(
+              k,
+              sent
+                ? { outreach: { attempts: 1, lastSentAt: new Date().toISOString() } }
+                : undefined,
+            ) as Prisma.InputJsonValue,
           },
         });
-        await this.moveToKey(organizationId, created.id, 'contact_attempt');
+        if (sent) {
+          await this.moveToKey(organizationId, created.id, 'contact_attempt');
+        }
       } catch (err) {
         this.logger.warn(
           `Outreach falhou pro card ${created.id} — fica em Oportunidade: ${(err as Error).message}`,
