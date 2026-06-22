@@ -349,12 +349,20 @@ export class RecoveryOutreachService {
       select: { id: true },
     });
     if (open) {
-      if (agentId) {
-        await this.prisma.conversation.update({
-          where: { id: open.id },
-          data: { activeAgentId: agentId },
-        });
-      }
+      // Reaproveitando conversa existente: força o bot a assumir o funil de
+      // recuperação — religa a IA, volta pra BOT e tira atribuição humana
+      // (decisão do produto: a recuperação é conduzida pela IA). Sem isso,
+      // uma conversa com kill-switch off de atendimento anterior nunca seria
+      // respondida pela IA.
+      await this.prisma.conversation.update({
+        where: { id: open.id },
+        data: {
+          status: ConversationStatus.BOT,
+          aiEnabled: true,
+          assignedToId: null,
+          ...(agentId ? { activeAgentId: agentId } : {}),
+        },
+      });
       return open.id;
     }
 
@@ -365,6 +373,7 @@ export class RecoveryOutreachService {
         channelId,
         contactId,
         status: ConversationStatus.BOT,
+        aiEnabled: true,
         protocol,
         isGroup: false,
         activeAgentId: agentId ?? undefined,
