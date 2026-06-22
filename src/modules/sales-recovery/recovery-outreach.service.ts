@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import {
+  ChannelType,
   ConversationStatus,
   MessageContentType,
   MessageDirection,
@@ -14,7 +15,7 @@ import { RecoveryConfigService } from './recovery-config.service';
 
 export interface ResolvedRecoveryContact {
   contactId: string;
-  externalId: string; // "<phone>@s.whatsapp.net"
+  externalId: string; // Zappfy: "<phone>@s.whatsapp.net" · Oficial: "<phone>"
 }
 
 interface OpenerVars {
@@ -44,9 +45,24 @@ export class RecoveryOutreachService {
     @InjectQueue('outbound-messages') private readonly outboundQueue: Queue,
   ) {}
 
-  /** WhatsApp JID individual usado como external_id (padrão Zappfy). */
-  static toExternalId(phone: string): string {
-    return `${phone}@s.whatsapp.net`;
+  /**
+   * external_id no formato que cada canal usa: Zappfy/baileys usa o JID
+   * (`<phone>@s.whatsapp.net`); WhatsApp Oficial (Meta) e demais usam só os
+   * dígitos. Tem que bater com o que o inbound grava, senão duplica contato.
+   */
+  private async toExternalId(channelId: string, phone: string): Promise<string> {
+    const type = await this.getChannelType(channelId);
+    return type === ChannelType.WHATSAPP_ZAPPFY
+      ? `${phone}@s.whatsapp.net`
+      : phone;
+  }
+
+  private async getChannelType(channelId: string): Promise<ChannelType | null> {
+    const channel = await this.prisma.channel.findUnique({
+      where: { id: channelId },
+      select: { type: true },
+    });
+    return channel?.type ?? null;
   }
 
   /**
@@ -58,7 +74,7 @@ export class RecoveryOutreachService {
     channelId: string,
     data: { phone: string; name?: string | null; email?: string | null },
   ): Promise<ResolvedRecoveryContact> {
-    const externalId = RecoveryOutreachService.toExternalId(data.phone);
+    const externalId = await this.toExternalId(channelId, data.phone);
 
     // 1. Já existe vínculo nesse canal?
     const existingChannel = await this.prisma.contactChannel.findUnique({
@@ -141,18 +157,18 @@ export class RecoveryOutreachService {
       agentId ?? null,
     );
 
-    const text = this.render(this.config.openerTemplate, vars);
-    await this.enqueueText({
+    const sent = await this.enqueue({
       organizationId,
       channelId,
       contactId,
       conversationId,
       externalId,
-      text,
+      vars,
+      templateName: this.config.openerTemplateName,
+      textTemplate: this.config.openerTemplate,
       source: 'sales_recovery_outreach',
     });
-    this.logger.log(`Opener de recuperação enfileirado: conv=${conversationId}`);
-    return { conversationId, sent: true };
+    return { conversationId, sent };
   }
 
   /**
@@ -177,38 +193,75 @@ export class RecoveryOutreachService {
         params.agentId ?? null,
       ));
 
-    const text = this.render(this.config.followUpTemplate, params.vars);
-    await this.enqueueText({
+    const sent = await this.enqueue({
       organizationId: params.organizationId,
       channelId: params.channelId,
       contactId: params.contactId,
       conversationId,
       externalId: params.externalId,
-      text,
+      vars: params.vars,
+      templateName: this.config.followUpTemplateName,
+      textTemplate: this.config.followUpTemplate,
       source: 'sales_recovery_followup',
     });
-    this.logger.log(`Follow-up de recuperação enfileirado: conv=${conversationId}`);
-    return { conversationId, sent: true };
+    return { conversationId, sent };
   }
 
-  private async enqueueText(params: {
+  /**
+   * Enfileira a mensagem proativa pela fila `outbound-messages`. No WhatsApp
+   * Oficial (Meta), fora da janela de 24h, é OBRIGATÓRIO usar template HSM
+   * aprovado — texto livre é rejeitado. Então: oficial → TEMPLATE (se houver
+   * nome configurado, senão pula com aviso); demais canais → TEXT. Retorna se
+   * a mensagem foi de fato enfileirada.
+   */
+  private async enqueue(params: {
     organizationId: string;
     channelId: string;
     contactId: string;
     conversationId: string;
     externalId: string;
-    text: string;
+    vars: OpenerVars;
+    templateName: string | null;
+    textTemplate: string;
     source: string;
-  }): Promise<void> {
-    const { channelId, contactId, conversationId, externalId, text, source } =
-      params;
+  }): Promise<boolean> {
+    const {
+      channelId,
+      contactId,
+      conversationId,
+      externalId,
+      vars,
+      templateName,
+      textTemplate,
+      source,
+    } = params;
+
+    const channelType = await this.getChannelType(channelId);
+    const requiresTemplate = channelType === ChannelType.WHATSAPP_OFFICIAL;
+
+    let type: MessageContentType;
+    let content: Prisma.InputJsonValue;
+    if (requiresTemplate) {
+      if (!templateName) {
+        this.logger.warn(
+          `Canal ${channelId} é WhatsApp Oficial e não há template configurado ` +
+            `(RECOVERY_OPENER_TEMPLATE_NAME) — outreach pulado, card fica em Oportunidade.`,
+        );
+        return false;
+      }
+      type = MessageContentType.TEMPLATE;
+      content = this.buildTemplate(templateName, vars);
+    } else {
+      type = MessageContentType.TEXT;
+      content = { text: this.render(textTemplate, vars) };
+    }
 
     const message = await this.prisma.message.create({
       data: {
         conversationId,
         direction: MessageDirection.OUTBOUND,
-        type: MessageContentType.TEXT,
-        content: { text },
+        type,
+        content,
         status: MessageStatus.QUEUED,
         senderName: 'Recuperação',
         metadata: { source },
@@ -233,7 +286,7 @@ export class RecoveryOutreachService {
         messageId: message.id,
         channelId,
         contactExternalId: externalId,
-        message: { type: MessageContentType.TEXT, content: { text } },
+        message: { type, content },
       },
       {
         attempts: 3,
@@ -242,6 +295,33 @@ export class RecoveryOutreachService {
         removeOnFail: false,
       },
     );
+
+    this.logger.log(
+      `Outreach (${type}) enfileirado: conv=${conversationId} canal=${channelType}`,
+    );
+    return true;
+  }
+
+  /**
+   * Monta o objeto de template HSM da Cloud API. Convenção: o template
+   * aprovado deve ter 3 variáveis no corpo, na ordem {{1}}=nome, {{2}}=produto,
+   * {{3}}=link. (Meta exige contagem exata; vars vazias viram "-".)
+   */
+  private buildTemplate(
+    name: string,
+    vars: OpenerVars,
+  ): Prisma.InputJsonValue {
+    const param = (v: string) => ({ type: 'text', text: v?.trim() || '-' });
+    return {
+      name,
+      language: { code: this.config.templateLang },
+      components: [
+        {
+          type: 'body',
+          parameters: [param(vars.nome), param(vars.produto), param(vars.link)],
+        },
+      ],
+    };
   }
 
   private async ensureConversation(
