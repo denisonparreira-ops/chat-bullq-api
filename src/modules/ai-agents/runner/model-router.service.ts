@@ -61,9 +61,15 @@ export class ModelRouterService {
   selectModel(input: SelectModelInput): string {
     const routing = this.parseRouting(input.modelParams);
 
-    const primary = routing.primary ?? SAKANA_SIMPLE_MODEL;
-    const escalation =
-      routing.escalation ?? input.modelId ?? SAKANA_CONVERSATION_MODEL;
+    // Sanitiza pra GARANTIR que só modelos Sakana saiam daqui. Agentes
+    // legados podem ter `modelId` antigo (ex.: "claude-sonnet-4-6") que ainda
+    // não foi migrado — nesse caso a síntese cairia no Sakana de conversa em
+    // vez de quebrar no provider. Mesma proteção pra overrides mal preenchidos.
+    const primary = this.toSakana(routing.primary, SAKANA_SIMPLE_MODEL);
+    const escalation = this.toSakana(
+      routing.escalation ?? input.modelId,
+      SAKANA_CONVERSATION_MODEL,
+    );
 
     if (routing.alwaysPrimary) return primary;
 
@@ -75,6 +81,19 @@ export class ModelRouterService {
       routing.escalateSynthesis ?? input.agentKind === 'WORKER';
 
     return escalate ? escalation : primary;
+  }
+
+  /**
+   * Garante que o modelo é um ID Sakana válido (sakana/* ou fugu*). Qualquer
+   * coisa fora disso (modelId legado de Claude/Anthropic, override quebrado,
+   * vazio) cai no fallback Sakana informado.
+   */
+  private toSakana(model: string | undefined | null, fallback: string): string {
+    const m = (model ?? '').trim();
+    if (m.startsWith('sakana/') || m === 'fugu' || m.startsWith('fugu-')) {
+      return m;
+    }
+    return fallback;
   }
 
   private parseRouting(
