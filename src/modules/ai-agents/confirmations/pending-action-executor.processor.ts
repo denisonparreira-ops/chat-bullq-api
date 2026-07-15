@@ -70,6 +70,8 @@ export class PendingActionExecutorProcessor extends WorkerHost {
     try {
       if (action.toolName === 'transferToHuman') {
         result = await this.executeTransferToHuman(action);
+      } else if (action.toolName === 'draftInitialPetition') {
+        result = await this.executeDraftPetition(action);
       } else {
         result = await this.executeHttpSkill(action);
       }
@@ -136,6 +138,35 @@ export class PendingActionExecutorProcessor extends WorkerHost {
       ok: true,
       transferredAt: new Date().toISOString(),
       reason: action.args?.reason ?? null,
+    };
+  }
+
+  private async executeDraftPetition(action: {
+    args: Record<string, unknown>;
+    approvedBy?: string;
+  }): Promise<unknown> {
+    const caseFileId = String(action.args?.caseFileId ?? '');
+    const draftText = String(action.args?.draftText ?? '');
+    if (!caseFileId || !draftText) {
+      throw new Error('draftInitialPetition pending action missing caseFileId/draftText');
+    }
+
+    await this.prisma.caseFile.update({
+      where: { id: caseFileId },
+      data: {
+        petitionDraft: draftText,
+        petitionDraftStatus: 'APPROVED',
+        petitionApprovedById: action.approvedBy ?? null,
+        petitionApprovedAt: new Date(),
+        status: 'PETITION_APPROVED',
+      },
+    });
+
+    return {
+      ok: true,
+      caseFileId,
+      approvedAt: new Date().toISOString(),
+      approvedBy: action.approvedBy ?? null,
     };
   }
 

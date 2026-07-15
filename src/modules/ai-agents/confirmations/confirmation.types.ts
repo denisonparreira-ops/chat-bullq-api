@@ -23,7 +23,8 @@ export type AffectedEntityType =
   | 'contact'
   | 'conversation'
   | 'agent'
-  | 'order';
+  | 'order'
+  | 'caseFile';
 
 export interface AffectedEntity {
   type: AffectedEntityType;

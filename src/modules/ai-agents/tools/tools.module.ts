@@ -17,6 +17,12 @@ import { ListarReunioesClienteTool } from './builtin/listar-reunioes-cliente.too
 import { LerTranscricaoReuniaoTool } from './builtin/ler-transcricao-reuniao.tool';
 import { AgendarReuniaoTool } from './builtin/agendar-reuniao.tool';
 import { MoveRecoveryCardTool } from './builtin/move-recovery-card.tool';
+import { CreateCaseFileTool } from './builtin/create-case-file.tool';
+import { RecordCaseDocumentTool } from './builtin/record-case-document.tool';
+import { GetCaseContextTool } from './builtin/get-case-context.tool';
+import { SaveCaseSummaryTool } from './builtin/save-case-summary.tool';
+import { MoveLegalCaseStageTool } from './builtin/move-legal-case-stage.tool';
+import { DraftInitialPetitionTool } from './builtin/draft-initial-petition.tool';
 import { HoppeClientService } from './client-ops/hoppe-client.service';
 import { GoogleAuthService } from './client-ops/google-auth.service';
 import { GoogleCalendarService } from './client-ops/google-calendar.service';
@@ -30,6 +36,7 @@ import { SqlToolExecutorService } from './sql-tool-executor.service';
 import { ConfigModule } from '@nestjs/config';
 import { ConfirmationsModule } from '../confirmations/confirmations.module';
 import { SalesRecoveryModule } from '../../sales-recovery/sales-recovery.module';
+import { DocumentsModule } from '../documents/documents.module';
 
 @Module({
   imports: [
@@ -38,6 +45,7 @@ import { SalesRecoveryModule } from '../../sales-recovery/sales-recovery.module'
     RealtimeModule,
     ConfirmationsModule,
     SalesRecoveryModule,
+    DocumentsModule,
     BullModule.registerQueue({ name: 'outbound-messages' }),
   ],
   providers: [
@@ -63,6 +71,12 @@ import { SalesRecoveryModule } from '../../sales-recovery/sales-recovery.module'
     LerTranscricaoReuniaoTool,
     AgendarReuniaoTool,
     MoveRecoveryCardTool,
+    CreateCaseFileTool,
+    RecordCaseDocumentTool,
+    GetCaseContextTool,
+    SaveCaseSummaryTool,
+    MoveLegalCaseStageTool,
+    DraftInitialPetitionTool,
     ToolRegistry,
     HttpToolExecutorService,
     SqlToolExecutorService,

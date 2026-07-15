@@ -198,6 +198,7 @@ model Organization {
   products      Product[]
   segments      Segment[]
   projects      Project[]
+  caseFiles     CaseFile[]
 
   @@map("organizations")
 }
@@ -461,6 +462,7 @@ model Contact {
   tags          ContactTag[]
   aiMemories    AiAgentMemory[]
   cards         Card[]           @relation("CardContact")
+  caseFiles     CaseFile[]
 
   @@index([organizationId, phone], name: "idx_contact_org_phone")
   @@index([organizationId, email], name: "idx_contact_org_email")
@@ -918,6 +920,7 @@ enum AiFinalAction {
   TRANSFERRED_TO_HUMAN
   CLOSED_CONVERSATION
   NO_ACTION
+  PETITION_DRAFT_SUBMITTED
 }
 
 model AiAgent {
@@ -1442,12 +1445,85 @@ model Card {
   contact      Contact?      @relation("CardContact", fields: [contactId], references: [id], onDelete: SetNull)
   conversation Conversation? @relation("CardConversation", fields: [conversationId], references: [id], onDelete: SetNull)
   assignedTo   User?         @relation("CardAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  caseFile     CaseFile?
 
   @@index([pipelineId, stageId, order])
   @@index([organizationId, status])
   @@index([contactId])
   @@index([conversationId])
   @@map("cards")
+}
+
+// ─── Pasta de caso jurídico (pré-processual) ─────
+//
+// Anchor leve local para o pipeline Jurídico — 1:1 com um Card. Integração
+// com ferramenta externa de gestão processual (ainda não escolhida) fica
+// por conta de uma skill HTTP customizada (Jarvis), sem precisar de código
+// novo aqui: externalProvider/externalRef só guardam a referência de volta.
+enum CaseFileStatus {
+  TRIAGE
+  DOCS_PENDING
+  DOCS_COMPLETE
+  SUMMARY_READY
+  PETITION_DRAFT
+  PETITION_APPROVED
+  FILED
+  ARCHIVED
+}
+
+model CaseFile {
+  id                   String         @id @default(cuid())
+  organizationId       String         @map("organization_id")
+  cardId               String         @unique @map("card_id")
+  contactId            String         @map("contact_id")
+  status               CaseFileStatus @default(TRIAGE)
+  caseSummary          String?        @map("case_summary") @db.Text
+  caseSummaryUpdatedAt DateTime?      @map("case_summary_updated_at")
+  petitionDraft        String?        @map("petition_draft") @db.Text
+  petitionDraftStatus  String         @default("NONE") @map("petition_draft_status")
+  petitionApprovedById String?        @map("petition_approved_by_id")
+  petitionApprovedAt   DateTime?      @map("petition_approved_at")
+  // Protocolo real é sempre feito por um humano fora da plataforma — estes
+  // campos só registram o resultado depois, nunca disparam peticionamento.
+  protocolNumber       String?        @map("protocol_number")
+  protocolDate         DateTime?      @map("protocol_date")
+  protocolCourt        String?        @map("protocol_court")
+  // Integração futura com ferramenta externa de gestão processual (ainda
+  // não escolhida) — preenchido quando a skill HTTP correspondente rodar.
+  externalProvider     String?        @map("external_provider")
+  externalRef          String?        @map("external_ref")
+  externalSyncedAt     DateTime?      @map("external_synced_at")
+  metadata             Json           @default("{}")
+  createdAt            DateTime       @default(now()) @map("created_at")
+  updatedAt            DateTime       @updatedAt @map("updated_at")
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  card         Card           @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  contact      Contact        @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  documents    CaseDocument[]
+
+  @@index([organizationId, status])
+  @@map("case_files")
+}
+
+model CaseDocument {
+  id               String    @id @default(cuid())
+  caseFileId       String    @map("case_file_id")
+  docType          String    @map("doc_type")
+  status           String    @default("PENDING")
+  messageId        String?   @map("message_id")
+  extractionStatus String    @default("PENDING") @map("extraction_status")
+  extractionMethod String?   @map("extraction_method")
+  extractedText    String?   @map("extracted_text") @db.Text
+  notes            String?
+  receivedAt       DateTime? @map("received_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  caseFile CaseFile @relation(fields: [caseFileId], references: [id], onDelete: Cascade)
+
+  @@index([caseFileId])
+  @@map("case_documents")
 }
 
 // ─── Recuperação de Vendas (webhooks Kirvano) ────

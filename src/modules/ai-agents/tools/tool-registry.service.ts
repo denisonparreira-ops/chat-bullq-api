@@ -18,6 +18,12 @@ import { ListarReunioesClienteTool } from './builtin/listar-reunioes-cliente.too
 import { LerTranscricaoReuniaoTool } from './builtin/ler-transcricao-reuniao.tool';
 import { AgendarReuniaoTool } from './builtin/agendar-reuniao.tool';
 import { MoveRecoveryCardTool } from './builtin/move-recovery-card.tool';
+import { CreateCaseFileTool } from './builtin/create-case-file.tool';
+import { RecordCaseDocumentTool } from './builtin/record-case-document.tool';
+import { GetCaseContextTool } from './builtin/get-case-context.tool';
+import { SaveCaseSummaryTool } from './builtin/save-case-summary.tool';
+import { MoveLegalCaseStageTool } from './builtin/move-legal-case-stage.tool';
+import { DraftInitialPetitionTool } from './builtin/draft-initial-petition.tool';
 
 /**
  * Registry of BUILT-IN skills (named "tools" in the code for legacy reasons).
@@ -55,6 +61,12 @@ export class ToolRegistry {
     lerTranscricaoReuniao: LerTranscricaoReuniaoTool,
     agendarReuniao: AgendarReuniaoTool,
     moveRecoveryCard: MoveRecoveryCardTool,
+    createCaseFile: CreateCaseFileTool,
+    recordCaseDocument: RecordCaseDocumentTool,
+    getCaseContext: GetCaseContextTool,
+    saveCaseSummary: SaveCaseSummaryTool,
+    moveLegalCaseStage: MoveLegalCaseStageTool,
+    draftInitialPetition: DraftInitialPetitionTool,
   ) {
     this.register(reply, ['ORCHESTRATOR', 'WORKER']);
     this.register(transfer, ['ORCHESTRATOR', 'WORKER']);
@@ -98,8 +110,25 @@ export class ToolRegistry {
       this.register(moveRecoveryCard, ['WORKER'], recoveryAgents);
     }
 
+    // Pasta de caso jurídico (pré-processual): restritas aos agentes do
+    // env LEGAL_AGENT_IDS (csv). draftInitialPetition sempre exige
+    // aprovação humana (ver DraftInitialPetitionTool) independente disso —
+    // o allowlist só controla quem PODE submeter, não quem aprova.
+    const legalAgents = (config.get<string>('LEGAL_AGENT_IDS') ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (legalAgents.length > 0) {
+      this.register(createCaseFile, ['WORKER'], legalAgents);
+      this.register(recordCaseDocument, ['WORKER'], legalAgents);
+      this.register(getCaseContext, ['WORKER'], legalAgents);
+      this.register(saveCaseSummary, ['WORKER'], legalAgents);
+      this.register(moveLegalCaseStage, ['WORKER'], legalAgents);
+      this.register(draftInitialPetition, ['WORKER'], legalAgents);
+    }
+
     this.logger.log(
-      `Built-in skills loaded: ${[...this.tools.keys()].join(', ')} (client-ops → ${clientOpsAgents.join(', ')}; recovery → ${recoveryAgents.join(', ') || 'none'})`,
+      `Built-in skills loaded: ${[...this.tools.keys()].join(', ')} (client-ops → ${clientOpsAgents.join(', ')}; recovery → ${recoveryAgents.join(', ') || 'none'}; legal → ${legalAgents.join(', ') || 'none'})`,
     );
   }
 

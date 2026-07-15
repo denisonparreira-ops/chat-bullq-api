@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "AiFinalAction" ADD VALUE 'PETITION_DRAFT_SUBMITTED';

@@ -25,7 +25,8 @@ export interface ToolResult {
     | 'TRANSFERRED_TO_HUMAN'
     | 'CLOSED_CONVERSATION'
     | 'DELEGATED'
-    | 'HANDED_BACK';
+    | 'HANDED_BACK'
+    | 'PETITION_DRAFT_SUBMITTED';
 }
 
 export interface AiTool {
