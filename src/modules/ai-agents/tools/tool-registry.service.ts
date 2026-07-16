@@ -110,25 +110,40 @@ export class ToolRegistry {
       this.register(moveRecoveryCard, ['WORKER'], recoveryAgents);
     }
 
-    // Pasta de caso jurídico (pré-processual): restritas aos agentes do
-    // env LEGAL_AGENT_IDS (csv). draftInitialPetition sempre exige
-    // aprovação humana (ver DraftInitialPetitionTool) independente disso —
-    // o allowlist só controla quem PODE submeter, não quem aprova.
+    // Pasta de caso jurídico (pré-processual) — dois níveis de acesso:
+    //   LEGAL_AGENT_IDS (csv)          → leitura E escrita (todas as 6 tools)
+    //   LEGAL_READONLY_AGENT_IDS (csv) → só getCaseContext (ex.: pós-venda,
+    //     que consulta andamento mas não pode criar/editar/mover o caso)
+    // draftInitialPetition sempre exige aprovação humana (ver
+    // DraftInitialPetitionTool) independente do allowlist — ele só
+    // controla quem PODE submeter, não quem aprova.
     const legalAgents = (config.get<string>('LEGAL_AGENT_IDS') ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const legalReadonlyAgents = (
+      config.get<string>('LEGAL_READONLY_AGENT_IDS') ?? ''
+    )
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
     if (legalAgents.length > 0) {
       this.register(createCaseFile, ['WORKER'], legalAgents);
       this.register(recordCaseDocument, ['WORKER'], legalAgents);
-      this.register(getCaseContext, ['WORKER'], legalAgents);
       this.register(saveCaseSummary, ['WORKER'], legalAgents);
       this.register(moveLegalCaseStage, ['WORKER'], legalAgents);
       this.register(draftInitialPetition, ['WORKER'], legalAgents);
     }
+    // Acesso total já inclui leitura — união das duas listas, sem duplicatas.
+    const caseContextReaders = [
+      ...new Set([...legalAgents, ...legalReadonlyAgents]),
+    ];
+    if (caseContextReaders.length > 0) {
+      this.register(getCaseContext, ['WORKER'], caseContextReaders);
+    }
 
     this.logger.log(
-      `Built-in skills loaded: ${[...this.tools.keys()].join(', ')} (client-ops → ${clientOpsAgents.join(', ')}; recovery → ${recoveryAgents.join(', ') || 'none'}; legal → ${legalAgents.join(', ') || 'none'})`,
+      `Built-in skills loaded: ${[...this.tools.keys()].join(', ')} (client-ops → ${clientOpsAgents.join(', ')}; recovery → ${recoveryAgents.join(', ') || 'none'}; legal-rw → ${legalAgents.join(', ') || 'none'}; legal-ro → ${legalReadonlyAgents.join(', ') || 'none'})`,
     );
   }
 
